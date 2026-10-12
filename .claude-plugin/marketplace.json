@@ -1,0 +1,12 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "Thang Nguyen" },
+  "description": "Claude Code mods: Plannotator reviews on the tailnet, and more to come",
+  "plugins": [
+    {
+      "name": "plannotator-tailnet",
+      "source": "./plannotator-tailnet",
+      "description": "Publishes this session's live Plannotator reviews on the tailnet, as a link above the prompt"
+    }
+  ]
+}
