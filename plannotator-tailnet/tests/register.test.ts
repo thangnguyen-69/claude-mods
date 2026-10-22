@@ -1,4 +1,4 @@
-import type { On, ProcessRunResult, RenderPropsOf } from 'claude-code'
+import type { On, ProcessRunResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 const HOST = 'demo.tailnet.ts.net'
@@ -10,8 +10,9 @@ const OTHER_ID = 'session-2'
 const SESSION = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
 const COMMAND = { command: 'plannotator-tailnet', args: '', origin: { kind: 'sdk' }, presentation: { isFullscreen: false, columns: 80 } } as const
 
-/** The band's props: the mod reads `hasSurvey`, the rest belong to the engine. */
-const BAND = { hasSurvey: false } as unknown as RenderPropsOf['AbovePrompt']
+const HOME = '/home/demo'
+/** Where the status line command reads this session's reviews. */
+const STATUS_FILE = `${HOME}/.claude/plannotator-tailnet/${SESSION_ID}.json`
 
 const planReview = (port: number, sessionId: string) => ({
   index: 1,
@@ -34,6 +35,8 @@ type Host = {
   readonly served: Map<number, string>
   /** The environment the plugin read and wrote. */
   readonly env: Map<string, string>
+  /** Every file the plugin wrote, by path: the last content. */
+  readonly files: Map<string, string>
   /** A mapping standing before the plugin first looked. */
   preServe: (port: number, target: string) => void
   /** What `plannotator sessions --json` answers from here on. */
@@ -45,6 +48,7 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
   const lines: string[] = []
   const served = new Map<number, string>()
   const env = new Map<string, string>()
+  const files = new Map<string, string>()
   let live: readonly unknown[] = sessions
 
   const reply = (stdout: string, exitCode = 0): { value: ProcessRunResult } => ({
@@ -58,12 +62,18 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
     return { value: undefined }
   })
 
+  on('fs.write', ($, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
+
   on('process.run', ($, e) => {
     const argv = [...e.argv]
     const line = argv.join(' ')
     lines.push(line)
 
     if (line === 'sh -lc command -v plannotator') return reply('/opt/plannotator\n')
+    if (line === 'sh -lc printf %s "$HOME"') return reply(HOME)
     if (argv[1] === 'sessions') return reply(JSON.stringify(live))
 
     if (line === 'tailscale status --json') {
@@ -102,6 +112,7 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
     lines,
     served,
     env,
+    files,
     preServe: (port, target) => served.set(port, target),
     setSessions: next => {
       live = next
@@ -116,8 +127,6 @@ function setUp(on: On, sessions: readonly unknown[], entries?: Readonly<Record<s
   // The engine's own answers for what the mod calls and nothing beneath it serves.
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: SESSION_ID }))
-  // The engine's own band, which is empty: a mount needs something beneath it.
-  on('ui.render', { component: 'AbovePrompt' }, () => h(Fragment, null))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
@@ -270,33 +279,45 @@ test('the command repairs the allowlist too, for a session that began without it
   expect(host.env.get('PLANNOTATOR_ALLOWED_HOSTS')).toBe(HOST)
 })
 
-test('draws the review as a hyperlink above the prompt', async ($, on) => {
+test('writes the review for the status line: localhost and tailnet link', async ($, on) => {
   const host = setUp(on, [planReview(PORT, SESSION_ID)])
-  const ui = await $.ui.mount({ plugin: 'plannotator-tailnet', surface: 'terminal', component: 'AbovePrompt', props: BAND })
-
-  // Nothing to link to before a review is live.
-  expect(await ui.findAll({ type: 'Link' })).toHaveLength(0)
 
   await $.session.start({ ...SESSION })
   await $.command.run({ ...COMMAND })
 
-  const links = await ui.findAll({ type: 'Link' })
-  expect(links).toHaveLength(1)
-  expect(links[0]?.props['href']).toBe(`https://${HOST}:${PORT}/`)
-  expect(host.served.has(PORT)).toBe(true)
+  expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([
+    { label: 'demo (plan)', local: `http://localhost:${PORT}`, tailnet: `https://${HOST}:${PORT}/` },
+  ])
 })
 
-test('yields the band to a survey', async ($, on) => {
-  setUp(on, [planReview(PORT, SESSION_ID)])
-  const ui = await $.ui.mount({
-    plugin: 'plannotator-tailnet',
-    surface: 'terminal',
-    component: 'AbovePrompt',
-    props: { hasSurvey: true } as unknown as RenderPropsOf['AbovePrompt'],
-  })
+test('writes the localhost link alone while the port is not published', async ($, on) => {
+  const host = setUp(on, [planReview(PORT, SESSION_ID)])
+  host.preServe(PORT, 'http://127.0.0.1:9000')
 
   await $.session.start({ ...SESSION })
   await $.command.run({ ...COMMAND })
 
-  expect(await ui.findAll({ type: 'Link' })).toHaveLength(0)
+  expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([{ label: 'demo (plan)', local: `http://localhost:${PORT}` }])
+})
+
+test("empties the status file once the review ends, and never lists another session's", async ($, on) => {
+  const host = setUp(on, [planReview(PORT, SESSION_ID), planReview(PORT + 1, OTHER_ID)])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+  expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toHaveLength(1)
+
+  host.setSessions([planReview(PORT + 1, OTHER_ID)])
+  await $.command.run({ ...COMMAND })
+  expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([])
+})
+
+test('off empties the status file', async ($, on) => {
+  const host = setUp(on, [planReview(PORT, SESSION_ID)])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+  await $.command.run({ ...COMMAND, args: 'off' })
+
+  expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([])
 })

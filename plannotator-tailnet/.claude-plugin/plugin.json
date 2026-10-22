@@ -1,7 +1,7 @@
 {
   "name": "plannotator-tailnet",
-  "version": "0.2.0",
-  "description": "Publishes this Claude session's own live Plannotator reviews on the tailnet, as a hyperlink in the band above the prompt",
+  "version": "0.3.0",
+  "description": "Publishes this Claude session's own live Plannotator reviews on the tailnet, and writes their localhost and tailnet links for the status line",
   "author": {
     "name": "Thang Nguyen"
   },

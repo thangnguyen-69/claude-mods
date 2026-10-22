@@ -1,7 +1,6 @@
-import { atom, read, update } from 'claude-code'
 import type { Engine, Register } from 'claude-code'
 
-import type { Band } from '../types'
+import type { StatusEntry } from '../types'
 
 /**
  * Publishes *this* Claude session's live Plannotator reviews on the tailnet.
@@ -14,8 +13,9 @@ import type { Band } from '../types'
  *   tailscale serve --bg --https=<port> http://127.0.0.1:<port>
  *
  * so the same review opens at `https://<host>.<tailnet>.ts.net:<port>`, and
- * puts that URL in the band above the prompt as a hyperlink for as long as the
- * review lives.
+ * writes this session's reviews (localhost and tailnet URL) to
+ * `~/.claude/plannotator-tailnet/<session id>.json`, which the person's status
+ * line command draws as links for as long as the review lives.
  *
  * Only this session's own reviews. The `sessions/` registry is machine-wide:
  * every concurrent Claude session would otherwise publish, display and toast
@@ -30,7 +30,8 @@ import type { Band } from '../types'
  * served to a different backend, is left alone.
  */
 
-const band = atom({ plugin: 'plannotator-tailnet', key: 'band' } as const, null as Band | null)
+/** Where the status line command reads this session's reviews: `<dir>/<session id>.json`. */
+const STATUS_DIR = '.claude/plannotator-tailnet'
 
 /** The store key per session: what that session's own mappings are. */
 const STORE_PREFIX = 'published:'
@@ -94,6 +95,10 @@ async function plannotatorExe($: Engine): Promise<string | null> {
 type Live = {
   /** `claude-code:<session id>` of the session that started it; empty when nothing tagged it. */
   hostSession: string
+  /** The loopback URL Plannotator opened. */
+  url: string
+  /** What the status line calls it: `<project> (<mode>)`. */
+  label: string
 }
 
 /** Live review sessions by port, each with the tag of the session that started it. */
@@ -118,7 +123,14 @@ async function liveSessions($: Engine): Promise<Map<number, Live>> {
     if (typeof port !== 'number' || !Number.isInteger(port)) continue
     if (port < MIN_PORT || port > MAX_PORT) continue
     const tag = entry['hostSession']
-    live.set(port, { hostSession: typeof tag === 'string' ? tag : '' })
+    const url = entry['url']
+    const project = entry['project']
+    const mode = entry['mode']
+    live.set(port, {
+      hostSession: typeof tag === 'string' ? tag : '',
+      url: typeof url === 'string' ? url : `http://localhost:${port}`,
+      label: `${typeof project === 'string' ? project : `:${port}`}${typeof mode === 'string' ? ` (${mode})` : ''}`,
+    })
   }
 
   return live
@@ -299,6 +311,35 @@ async function adoptLegacy($: Engine, status: Servings, live: Map<number, Live>)
   await $.store.delete(LEGACY_KEY)
 }
 
+/** `$HOME`, resolved once; null when the host will not say. */
+let home: string | null | undefined
+
+async function homeDir($: Engine): Promise<string | null> {
+  if (home !== undefined) return home
+  const out = await run($, ['sh', '-lc', 'printf %s "$HOME"'], 10000)
+  home = out.isOk && out.stdout.trim() !== '' ? out.stdout.trim() : null
+  return home
+}
+
+/** The status file's last content, so a sync that changed nothing writes nothing. */
+let written: { path: string; text: string } | undefined
+
+/** Writes this session's reviews for the status line command; an empty list when none is live. */
+async function writeStatus($: Engine, tag: string | null, entries: StatusEntry[]): Promise<void> {
+  if (tag === null) return
+  const dir = await homeDir($)
+  if (dir === null) return
+  const path = `${dir}/${STATUS_DIR}/${tag.slice('claude-code:'.length)}.json`
+  const text = JSON.stringify(entries) + '\n'
+  if (written?.path === path && written.text === text) return
+  try {
+    await $.fs.write(path, text)
+    written = { path, text }
+  } catch {
+    // An fs hook or the OS refused: the next sync tries again.
+  }
+}
+
 /** Brings `tailscale serve` in line with this session's own live reviews, and reports what changed. */
 async function sync($: Engine, announce: boolean): Promise<Report> {
   const report: Report = { published: [], serving: [], unpublished: [], skipped: [] }
@@ -322,14 +363,15 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
   // bound to something else is the person's: neither taken over nor adopted,
   // since only a mapping this mod made is ever in `ours`, and only `ours` is
   // ever removed.
-  const shown: string[] = []
-  for (const [port] of mine) {
+  const shown: StatusEntry[] = []
+  for (const [port, entry] of mine) {
     const held = status.byPort.get(port)
     if (held !== undefined) {
       if (held === proxyOf(port)) {
         report.serving.push(urlFor(status.host, port))
-        shown.push(urlFor(status.host, port))
+        shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, port) })
       } else {
+        shown.push({ label: entry.label, local: entry.url })
         report.skipped.push(`:${port} already serves ${held}`)
       }
       continue
@@ -338,12 +380,13 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
     const served = await run($, ['tailscale', 'serve', '--bg', `--https=${port}`, proxyOf(port)])
     if (!served.isOk) {
       report.skipped.push(`:${port} ${lastLineOf(served.stderr) || 'serve failed'}`)
+      shown.push({ label: entry.label, local: entry.url })
       continue
     }
 
     ours.add(port)
     report.published.push(urlFor(status.host, port))
-    shown.push(urlFor(status.host, port))
+    shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, port) })
   }
 
   // Unwind this session's mappings once the review behind them has ended.
@@ -361,11 +404,7 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
 
   await reapOrphans($, status, live, key)
 
-  // The band is one line: the newest of this session's reviews. Written only
-  // when it moves, since a write redraws the band.
-  const current = await read($, band)
-  const next: Band | null = shown[0] === undefined ? null : { url: shown[0] }
-  if (current?.url !== next?.url) await update($, band, () => next)
+  await writeStatus($, tag, shown)
 
   if (announce && (report.published.length > 0 || report.serving.length > 0)) {
     const urls = [...report.published, ...report.serving]
@@ -398,23 +437,6 @@ async function syncOnce($: Engine, announce: boolean): Promise<Report | undefine
 }
 
 export const register: Register = (on, options) => {
-  // The band is this session's own line and nothing else draws in it while no
-  // review is live: below a survey, the band is the survey's.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const drawn = await next(e)
-
-    const live = (await read($, band)) ?? null
-    if (live === null || e.props.hasSurvey) return drawn
-
-    const { Box, Text, Link } = $.ui.resolve(e)
-    return (
-      <Box>
-        <Text dimColor>review </Text>
-        <Link href={live.url} />
-      </Box>
-    )
-  })
-
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: COMMAND,
@@ -464,7 +486,7 @@ export const register: Register = (on, options) => {
         if ((await run($, ['tailscale', 'serve', `--https=${port}`, 'off'], 10000)).isOk) stopped.push(port)
       }
       if (tag !== null) await $.store.delete(key)
-      await update($, band, () => null)
+      await writeStatus($, tag, [])
 
       return { text: stopped.length > 0 ? `Unpublished ${stopped.map(port => `:${port}`).join(', ')}.` : 'Nothing published.' }
     }

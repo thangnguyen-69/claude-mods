@@ -2,8 +2,8 @@
 
 Publishes *this* Claude session's live Plannotator reviews on the tailnet, so a
 plan, a diff or a document can be reviewed from a phone or another machine
-instead of only from the terminal that opened it — and puts the review's URL in
-the band above the prompt as a hyperlink for as long as it lives.
+instead of only from the terminal that opened it — and writes the review's
+localhost and tailnet links for your status line for as long as it lives.
 
 ## Install
 
@@ -27,9 +27,31 @@ tailscale serve --bg --https=<port> http://127.0.0.1:<port>
 ```
 
 The review is then open at `https://<host>.<tailnet>.ts.net:<port>` — tailnet
-only, never public — and that URL is drawn under the prompt as a link (OSC 8 on
-the terminal) until the review ends. When a Plannotator review is opened through
-the tool, the URL is toasted as well.
+only, never public. When a Plannotator review is opened through the tool, the
+URL is toasted as well.
+
+## Status line
+
+While a review of this session's is live, the mod keeps
+`~/.claude/plannotator-tailnet/<session id>.json` up to date:
+
+```json
+[{ "label": "115515 (review)", "local": "http://localhost:33919", "tailnet": "https://<host>.<tailnet>.ts.net:33919/" }]
+```
+
+`tailnet` is present only while `tailscale serve` publishes the port; the list
+is empty once no review is live. A `statusLine` command reads it with the
+`session_id` it gets on stdin and draws the links, for example as OSC 8:
+
+```bash
+f="$HOME/.claude/plannotator-tailnet/${session_id}.json"
+jq -r '.[] | [.label, .local, (.tailnet // "")] | @tsv' "$f" 2>/dev/null |
+while IFS=$'\t' read -r label local tailnet; do
+  printf '%s \033]8;;%s\033\\localhost\033]8;;\033\\' "$label" "$local"
+  [ -n "$tailnet" ] && printf ' \033]8;;%s\033\\tailnet\033]8;;\033\\' "$tailnet"
+  printf '\n'
+done
+```
 
 ## Only this session's own reviews
 
@@ -146,8 +168,8 @@ looks healthy, no decision is written, and the agent waits.
   afresh every sync: `/clear` starts a new session id in the same process with
   no `session.start` to hear it, and the review the old id opened must not
   follow the new one.
-- The band is drawn only when a review of this session's is live, and yields to
-  a survey (`e.props.hasSurvey`), which owns the band while it is up.
+- The status file is rewritten only when its content changes, and holds only
+  this session's reviews, so the status line never shows another session's.
 - A failed lookup of the `plannotator` binary is retried on the next Plannotator
   tool call, so a mod that started before the binary resolved does not stay
   broken.

@@ -1,11 +1,9 @@
-/** This session's live review, as the band above the prompt draws it. */
-export type Band = {
-  /** The tailnet URL the review is open at; the link's text and its href. */
-  url: string;
+/** One of this session's live reviews, as the status line command draws it. */
+export type StatusEntry = {
+  /** `<project> (<mode>)`, from Plannotator's session list. */
+  label: string;
+  /** The loopback URL Plannotator opened. */
+  local: string;
+  /** The tailnet URL, present while `tailscale serve` publishes the review's port. */
+  tailnet?: string;
 };
-
-declare module 'claude-code' {
-  interface PluginState {
-    'plannotator-tailnet': { band: Band | null };
-  }
-}
