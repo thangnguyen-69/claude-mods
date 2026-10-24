@@ -1,0 +1,8 @@
+{
+  "name": "implement-beads",
+  "version": "0.1.0",
+  "description": "Run beads (bd) unattended as implementer + judge teammate pairs in herdr panes, with a hook that stops implementers from closing their own beads",
+  "author": {
+    "name": "Thang Nguyen"
+  }
+}
