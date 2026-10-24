@@ -16,6 +16,7 @@ mod in every session started from then on.
 | Mod | What it does |
 | --- | --- |
 | [`plannotator-tailnet`](./plannotator-tailnet) | Publishes *this* Claude session's live [Plannotator](https://github.com/backnotprop/plannotator) reviews on your tailnet, so a plan or a diff can be reviewed from a phone — and puts the review's URL above the prompt as a hyperlink while it lives. |
+| [`implement-beads`](./implement-beads) | Works through a [beads](https://github.com/gastownhall/beads) epic unattended: per bead, an implementer teammate does the work and a separate judge teammate verifies every acceptance criterion before the bead can pass. Teammates run as named Claude sessions in herdr panes. |
 
 Each mod has its own README with requirements and design notes.
 

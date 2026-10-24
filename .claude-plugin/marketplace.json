@@ -1,12 +1,17 @@
 {
   "name": "claude-mods",
   "owner": { "name": "Thang Nguyen" },
-  "description": "Claude Code mods: Plannotator reviews on the tailnet, and more to come",
+  "description": "Claude Code mods: Plannotator reviews on the tailnet, implementer/judge bead pairs, and more to come",
   "plugins": [
     {
       "name": "plannotator-tailnet",
       "source": "./plannotator-tailnet",
       "description": "Publishes this session's live Plannotator reviews on the tailnet, as a link above the prompt"
+    },
+    {
+      "name": "implement-beads",
+      "source": "./implement-beads",
+      "description": "Runs beads unattended as implementer + judge teammate pairs in herdr panes; implementers can never close their own bead"
     }
   ]
 }
