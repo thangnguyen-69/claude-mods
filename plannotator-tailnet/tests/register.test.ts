@@ -130,6 +130,10 @@ function setUp(on: On, sessions: readonly unknown[], entries?: Readonly<Record<s
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
+  on('ui.invalidate', () => ({ value: undefined }))
+  // The engine's own hint line, empty: the mod draws this beside its link and
+  // returns it unchanged when no review is live.
+  on('ui.render', { component: 'PromptHint' }, () => h(Fragment, null) as never)
 
   return fakeHost(on, sessions)
 }
@@ -320,4 +324,53 @@ test('off empties the status file', async ($, on) => {
   await $.command.run({ ...COMMAND, args: 'off' })
 
   expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([])
+})
+
+test('draws the newest review on the hint line, tailnet link first', async ($, on) => {
+  setUp(on, [planReview(PORT, SESSION_ID)])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  const drawn = await $.ui.render({
+    surface: 'terminal',
+    component: 'PromptHint',
+    props: { isDraft: false, isWorking: false, hint: '' },
+    requestId: 'hint',
+  } as never)
+
+  const nodes: any[] = []
+  const walk = (node: any): void => {
+    if (node === null || typeof node !== 'object') return
+    nodes.push(node)
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(drawn)
+
+  const link = nodes.find(node => node.type === 'Link')
+  expect(link?.props?.href).toBe(`https://${HOST}:${PORT}/`)
+})
+
+test('draws nothing on the hint line before a review is live', async ($, on) => {
+  setUp(on, [])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  const drawn = await $.ui.render({
+    surface: 'terminal',
+    component: 'PromptHint',
+    props: { isDraft: false, isWorking: false, hint: '' },
+    requestId: 'hint',
+  } as never)
+
+  const nodes: any[] = []
+  const walk = (node: any): void => {
+    if (node === null || typeof node !== 'object') return
+    nodes.push(node)
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(drawn)
+
+  expect(nodes.find(node => node.type === 'Link')).toBeUndefined()
 })

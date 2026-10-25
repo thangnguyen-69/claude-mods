@@ -324,8 +324,25 @@ async function homeDir($: Engine): Promise<string | null> {
 /** The status file's last content, so a sync that changed nothing writes nothing. */
 let written: { path: string; text: string } | undefined
 
+/**
+ * What the hint line draws: this session's newest live review, or null.
+ *
+ * Held in the module rather than `$.state` because only the render hook reads
+ * it and only `writeStatus` writes it — one writer, one reader, no subscription
+ * to set up. A hot reload re-evaluates the module, and the next sync fills it
+ * in again.
+ */
+let hint: StatusEntry | null = null
+
 /** Writes this session's reviews for the status line command; an empty list when none is live. */
 async function writeStatus($: Engine, tag: string | null, entries: StatusEntry[]): Promise<void> {
+  // The hint line is fed here too: this is the one place a sync's list of live
+  // reviews arrives, so the two views cannot disagree.
+  const newest = entries[0] ?? null
+  const changed = hint?.local !== newest?.local
+  hint = newest
+  if (changed) $.ui.invalidate('ui.render')
+
   if (tag === null) return
   const dir = await homeDir($)
   if (dir === null) return
@@ -437,6 +454,31 @@ async function syncOnce($: Engine, announce: boolean): Promise<Report | undefine
 }
 
 export const register: Register = (on, options) => {
+  // Drawn on the hint line under the prompt, beside the engine's own hint.
+  //
+  // 0.3.0 wrote the JSON and left a `statusLine` command to draw it, but a
+  // plugin cannot ship that key (the manifest rejects `statusLine`) and
+  // `$.settings` is read-only, so every install needed a hand-written command
+  // plus this machine's own session-id path. A render hook is portable: it
+  // installs with the plugin and needs nothing of the person's settings.
+  //
+  // `next(e)` is kept and drawn beside the link rather than replaced — that
+  // tree is the engine's own hint line, and dropping it would trade one useful
+  // line for another.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const drawn = await next(e)
+    if (hint === null) return drawn
+
+    const { Box, Link, Text } = $.ui.resolve(e)
+    return (
+      <Box>
+        {drawn as never}
+        <Text dimColor> review </Text>
+        <Link href={hint.tailnet ?? hint.local} />
+      </Box>
+    )
+  })
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: COMMAND,

@@ -30,18 +30,35 @@ The review is then open at `https://<host>.<tailnet>.ts.net:<port>` — tailnet
 only, never public. When a Plannotator review is opened through the tool, the
 URL is toasted as well.
 
-## Status line
+## Hint line
 
-While a review of this session's is live, the mod keeps
-`~/.claude/plannotator-tailnet/<session id>.json` up to date:
+While a review of this session's is live, the newest one is drawn on the hint
+line under the prompt — `review` and a link carrying the tailnet URL when the
+port is published, the loopback URL otherwise. Nothing is drawn when no review
+is live. This needs no settings entry and no per-machine script: it installs
+with the plugin.
+
+It is drawn by a `ui.render` hook on `PromptHint`, beside the engine's own hint
+rather than replacing it — that tree carries the key hints and pills, and
+dropping it would trade one useful line for another.
+
+An earlier version wrote the links to a JSON file and left a `statusLine`
+command to draw it. That could not work on its own: a plugin **cannot** ship a
+`statusLine` key (the manifest rejects it as an unknown field) and `$.settings`
+is read-only, so every install needed a hand-written command plus this machine's
+session-id path.
+
+## The status file, for a statusLine command
+
+The mod still keeps `~/.claude/plannotator-tailnet/<session id>.json` up to
+date, so a `statusLine` command of your own can draw the same links:
 
 ```json
 [{ "label": "115515 (review)", "local": "http://localhost:33919", "tailnet": "https://<host>.<tailnet>.ts.net:33919/" }]
 ```
 
 `tailnet` is present only while `tailscale serve` publishes the port; the list
-is empty once no review is live. A `statusLine` command reads it with the
-`session_id` it gets on stdin and draws the links, for example as OSC 8:
+is empty once no review is live. Read it with the `session_id` stdin gives you:
 
 ```bash
 f="$HOME/.claude/plannotator-tailnet/${session_id}.json"
