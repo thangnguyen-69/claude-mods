@@ -80,3 +80,15 @@ The band is a single line. Eight links plus the engine's own key hints will wrap
 or truncate in a narrow terminal — the honest limit is the terminal width, not
 `MAX_KEPT`. A better shape, if it ever matters, is a second line or `/pr` listing
 them; the count is a stopgap for that, not a solution.
+
+## Shipped
+
+Committed `537e49c` (pr-links 0.2.0) and pushed to `claude-mods` main; the
+marketplace clone was fast-forwarded and `claude plugin update pr-links`
+installed 0.2.0. **A restart is required** — the update reported "Restart to
+apply changes", so the running session keeps 0.1.0's behaviour until then.
+
+One cleanup was made between the draft and the commit: the restore path still
+spread `stored.links.map(link => ({ ...link, url: link.url }))`, a no-op left
+from an earlier draft of the plural change. It was removed before committing and
+`tsc` plus the `bun` checks were re-run afterwards.
