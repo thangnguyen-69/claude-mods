@@ -378,6 +378,36 @@ test('draws the newest review on the hint line, tailnet link first', async ($, o
 
   const link = nodes.find(node => node.type === 'Link')
   expect(link?.props?.href).toBe(`https://${HOST}:${SERVED}/`)
+  // Labelled: a `Link` with no label draws the whole URL, which is longer than
+  // the rest of the hint line.
+  expect(link?.props?.label).toBe('tailnet')
+})
+
+test('labels the link "local" while only the loopback URL is known', async ($, on) => {
+  const host = setUp(on, [planReview(PORT, SESSION_ID)])
+  host.preServe(SERVED, 'http://127.0.0.1:9000')
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  const drawn = await $.ui.render({
+    surface: 'terminal',
+    component: 'PromptHint',
+    props: { isDraft: false, isWorking: false, hint: '' },
+    requestId: 'hint',
+  } as never)
+
+  const nodes: any[] = []
+  const walk = (node: any): void => {
+    if (node === null || typeof node !== 'object') return
+    nodes.push(node)
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(drawn)
+
+  const link = nodes.find(node => node.type === 'Link')
+  expect(link?.props?.href).toBe(`http://localhost:${PORT}`)
+  expect(link?.props?.label).toBe('local')
 })
 
 test('draws nothing on the hint line before a review is live', async ($, on) => {

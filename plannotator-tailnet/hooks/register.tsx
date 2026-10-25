@@ -566,6 +566,10 @@ export const register: Register = (on, options) => {
   // `next(e)` is kept and drawn beside the link rather than replaced — that
   // tree is the engine's own hint line, and dropping it would trade one useful
   // line for another.
+  //
+  // The label is short on purpose. A `Link` with no label draws the whole URL
+  // as its text, which for a tailnet URL is longer than the rest of the line
+  // put together; `tailnet` is the word that says which of the two links it is.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const drawn = await next(e)
     if (hint === null) return drawn
@@ -575,7 +579,7 @@ export const register: Register = (on, options) => {
       <Box>
         {drawn as never}
         <Text dimColor> review </Text>
-        <Link href={hint.tailnet ?? hint.local} />
+        <Link href={hint.tailnet ?? hint.local} label={hint.tailnet === undefined ? 'local' : 'tailnet'} />
       </Box>
     )
   })

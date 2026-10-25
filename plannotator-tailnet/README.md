@@ -64,10 +64,14 @@ withheld rather than guessed at: the localhost link is always still there.
 ## Hint line
 
 While a review of this session's is live, the newest one is drawn on the hint
-line under the prompt — `review` and a link carrying the tailnet URL when the
-port is published and answers, the loopback URL otherwise. Nothing is drawn
-when no review is live. This needs no settings entry and no per-machine script:
-it installs with the plugin.
+line under the prompt — `review` and a short link, `tailnet` when the port is
+published and answers, `local` when only the loopback URL is known. Nothing is
+drawn when no review is live. This needs no settings entry and no per-machine
+script: it installs with the plugin.
+
+The link is labelled rather than drawn bare: a `Link` with no label uses the
+whole URL as its text, and a tailnet URL is longer than the rest of the hint
+line put together.
 
 It is drawn by a `ui.render` hook on `PromptHint`, beside the engine's own hint
 rather than replacing it — that tree carries the key hints and pills, and
