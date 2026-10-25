@@ -1,0 +1,7 @@
+{
+  "name": "pr-links",
+  "version": "0.1.0",
+  "description": "Pins the URL of every pull/merge request this session's commands print, as a clickable link on the hint line under the prompt",
+  "author": { "name": "Thang Nguyen" },
+  "types": "./types/index.d.ts"
+}
