@@ -109,6 +109,15 @@ URL. In that session the fetch is refused outright, so the probe read as
 unreachable and the hint line showed `local` **while curl got 200 from the same
 URL**. A link that worked was being hidden.
 
+Independently of any policy, a fetch of Plannotator's **root page could never
+have answered**: it is 23,661,704 bytes of HTML, and the host's fetch path caps
+a body at 10 MiB — `maxContentLength size of 10485760 exceeded`. Measured
+2026-10-25 on a live review: `curl -sI http://127.0.0.1:34653/` →
+`content-length: 23661704`. So the 0.5.1 probe had two independent ways to read
+healthy link as dead, and neither is fixable by changing the URL (a range
+request is ignored: `-r 0-1023` still returned the whole 23.6 MB with `200`).
+A liveness probe must not read a body — `ss` (0.5.2) or `HEAD`.
+
 It could not be diagnosed from inside either: instrumenting the cache copy
 produced no output, because hot reload re-evaluates the module it already
 resolved rather than reloading the changed file — and every candidate copy
@@ -136,3 +145,56 @@ it.
 One caveat found while testing the tests: the fixture must model the review's
 own `0.0.0.0` listener, or the anchor test is vacuous — the first version of it
 passed against the broken regex.
+
+## Third round: an orphaned link that 502s
+
+A review opened from a shell (`PLANNOTATOR_REMOTE=0 plannotator annotate …`) was
+started under a 50-minute `timeout`; it hit the limit and exited. Its tailnet
+mapping did not go with it — `tailscale serve status` still listed
+`:35653 -> http://127.0.0.1:34653`, the tailscale0 listener was still up, and
+the URL answered **502**, because nothing was behind it any more.
+
+The mod did not reap it, and could not: `reapOrphans` only walks keys under
+`published:`, and the entry that would have named this review's port had
+already been dropped from the store when the review left `plannotator
+sessions`. An orphan whose store entry is gone mid-flight is unreachable to the
+reaper, and it survives until someone removes it by hand:
+
+```
+tailscale serve --https=<port+1000> off
+```
+
+Confirmed gone afterwards by `ss -ltn | grep '%tailscale0:<port>'`, not by
+`serve status`.
+
+Worth knowing before trusting the link: a 502 on the port means the mapping
+outlived its review. The port arithmetic alone is not proof the link is live.
+
+## Third round: the plugin was disabled
+
+After a restart with 0.5.2 installed, the mod did nothing — no status-file
+write since 15:06, and its `tool.call` hook did not fire on a Plannotator tool
+call. The source compiled cleanly and the cache copy was byte-identical to the
+repo, so the new code was again the wrong suspect.
+
+`claude plugin list` reported **`Status: ✘ disabled`** for all three
+`claude-mods` plugins, although `enabledPlugins` in `~/.claude/settings.json`
+said `true` for each. A disabled plugin's hooks silently never run: no error,
+no log line, nothing.
+
+`claude plugin enable <plugin>@<marketplace>` fixes it, and takes effect on the
+next process start.
+
+### The lesson this session kept re-learning
+
+Three separate failures presented identically as "the feature does nothing":
+
+| cause | evidence |
+|---|---|
+| wrong version loaded (0.3.0) | `grep -c <new-symbol>` differs across cache dirs |
+| silent `tailscale serve` failure | `ss` has no `%tailscale0:<port>` row |
+| plugin disabled | `claude plugin list` says `✘ disabled` |
+
+Each time, the new code was read and re-read before the cheap check was run.
+The order should be: is it enabled, is it the right version, does the listener
+exist, is its output right — and only then the source.
