@@ -101,3 +101,38 @@ Memory `tailscale-serve-port-collision-with-0-0-0` previously stated that
 `PLANNOTATOR_REMOTE=1` is "what forces the 0.0.0.0 bind". The trigger is **any**
 `0.0.0.0` bind, whoever makes it, and the offset fix works without changing the
 binder. That memory has been updated with the measurements above.
+
+## Second round: the probe withheld a working link
+
+0.5.1 answered the "is it served?" question with `$.http.fetch` on the tailnet
+URL. In that session the fetch is refused outright, so the probe read as
+unreachable and the hint line showed `local` **while curl got 200 from the same
+URL**. A link that worked was being hidden.
+
+It could not be diagnosed from inside either: instrumenting the cache copy
+produced no output, because hot reload re-evaluates the module it already
+resolved rather than reloading the changed file — and every candidate copy
+looked identical from the outside, so tracing which one was loaded went
+nowhere.
+
+0.5.2 probes `ss -ltn` instead, keyed on the interface:
+
+```
+LISTEN 0 4096 100.76.234.61%tailscale0:21011 0.0.0.0:*    # serves
+LISTEN 0 512               0.0.0.0:20011 0.0.0.0:*        # the review's own bind
+```
+
+A local read, so no fetch policy can refuse it. The `%tailscale0` anchor is
+load-bearing: an unanchored `:<port>` search matches the review's own `0.0.0.0`
+listener, which is present exactly when the tailnet reservation failed. Verified
+against real `ss` output — `21011` matches, `20011` does not, and a bare search
+matches both.
+
+A test covers it: with two reviews, one whose own port *is* the other's derived
+port, the unanchored regex makes the first look published and republishes the
+`wrong version number` link. That test is red without the anchor and green with
+it.
+
+One caveat found while testing the tests: the fixture must model the review's
+own `0.0.0.0` listener, or the anchor test is vacuous — the first version of it
+passed against the broken regex.
