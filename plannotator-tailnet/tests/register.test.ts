@@ -48,34 +48,27 @@ type Host = {
   /** What `plannotator sessions --json` answers from here on. */
   setSessions: (sessions: readonly unknown[]) => void
   /**
-   * Which tailnet ports answer. Every port answers 200 by default; a port
-   * removed here is one a `serve` reservation claims but nothing serves, which
-   * is the failure this mod has to survive.
+   * Which tailnet ports really serve. Every port does by default; a port
+   * removed here is one a `serve` reservation claims but whose tailscale0
+   * listener never appeared — the failure this mod has to survive.
    */
   setUnreachable: (ports: readonly number[]) => void
-  /** Every URL the mod asked the host to fetch. */
-  readonly fetched: () => string[]
+  /** Every `ss -ltn` the mod asked for. */
+  readonly probed: () => number
 }
 
-/** Stands in for the host, so the test runs no tailscale and no plannotator. */
+/** Stands in for the host, so the test runs no tailscale, no plannotator, no ss. */
 function fakeHost(on: On, sessions: readonly unknown[]): Host {
   const lines: string[] = []
   const served = new Map<number, string>()
   const env = new Map<string, string>()
   const files = new Map<string, string>()
   const unreachable = new Set<number>()
-  const fetched: string[] = []
+  let probes = 0
   let live: readonly unknown[] = sessions
 
   const reply = (stdout: string, exitCode = 0): { value: ProcessRunResult } => ({
     value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-  })
-
-  on('http.fetch', ($, e) => {
-    fetched.push(e.url)
-    const port = Number(new URL(e.url).port)
-    if (unreachable.has(port)) throw new Error(`connect ECONNREFUSED ${e.url}`)
-    return { value: { status: 200, ok: true, headers: {}, text: '' } }
   })
 
   on('env.get', ($, e) => ({ value: env.get(e.name) }))
@@ -98,6 +91,26 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
     if (line === 'sh -lc command -v plannotator') return reply('/opt/plannotator\n')
     if (line === 'sh -lc printf %s "$HOME"') return reply(HOME)
     if (argv[1] === 'sessions') return reply(JSON.stringify(live))
+
+    // What the tailscaled side actually listens on: one `<ip>%tailscale0:<p>`
+    // row per mapping that serves, and none for one whose reservation silently
+    // failed — the whole point of probing this rather than `serve status`.
+    //
+    // The review's own `0.0.0.0:<port>` listener is always there, because
+    // Plannotator binds that way. It must NOT read as the tailnet one: that
+    // confusion is exactly the field failure this probe exists to catch.
+    if (line === 'ss -ltn') {
+      probes += 1
+      const rows = [...live]
+        .map(entry => (entry as { port?: number }).port)
+        .filter((port): port is number => typeof port === 'number')
+        .map(port => `LISTEN 0 512 0.0.0.0:${port} 0.0.0.0:*`)
+      for (const port of served.keys()) {
+        if (unreachable.has(port)) continue
+        rows.push(`LISTEN 0 4096 100.64.0.1%tailscale0:${port} 0.0.0.0:*`)
+      }
+      return reply(rows.length > 0 ? `${rows.join('\n')}\n` : '')
+    }
 
     if (line === 'tailscale status --json') {
       return reply(JSON.stringify({ Self: { DNSName: `${HOST}.` } }))
@@ -136,7 +149,7 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
     served,
     env,
     files,
-    fetched: () => [...fetched],
+    probed: () => probes,
     preServe: (port, target) => served.set(port, target),
     setSessions: next => {
       live = next
@@ -445,12 +458,12 @@ test('re-publishes a reservation that is standing but does not answer', async ($
   await $.session.start({ ...SESSION })
   const answer = await $.command.run({ ...COMMAND })
 
-  expect(host.fetched()).toContain(`https://${HOST}:${SERVED}/`)
+  expect(host.probed()).toBeGreaterThan(0)
   expect(answer.text).toContain(`:${SERVED} was reserved but does not answer`)
   expect(answer.text).not.toContain(`serving  https://${HOST}:${SERVED}/`)
 })
 
-test('withholds the tailnet link until the listener answers', async ($, on) => {
+test('withholds the tailnet link until the listener appears', async ($, on) => {
   const host = setUp(on, [planReview(PORT, SESSION_ID)])
   host.setUnreachable([SERVED])
 
@@ -481,8 +494,43 @@ test('probes a tailnet port once, not on every sync', async ($, on) => {
 
   await $.session.start({ ...SESSION })
   await $.command.run({ ...COMMAND })
+  const afterFirst = host.probed()
   await $.command.run({ ...COMMAND })
 
-  const probes = host.fetched().filter(url => url === `https://${HOST}:${SERVED}/`)
-  expect(probes).toHaveLength(1)
+  // The port is known to serve after the first sync, so the second reads
+  // nothing more: `ss` on every 4-second tick would be pure churn.
+  expect(afterFirst).toBeGreaterThan(0)
+  expect(host.probed()).toBe(afterFirst)
+})
+
+test('a listener on 0.0.0.0 is not mistaken for the tailnet one', async ($, on) => {
+  // The failure in the field: serve status printed the mapping, and the only
+  // listener on the port was the review's own 0.0.0.0 bind, so every https
+  // request died with `wrong version number`. The probe must key on the
+  // tailscale0 interface, not on the port alone.
+  const host = setUp(on, [planReview(PORT, SESSION_ID)])
+  host.setUnreachable([SERVED])
+
+  await $.session.start({ ...SESSION })
+  const answer = await $.command.run({ ...COMMAND })
+
+  expect(answer.text).toContain('reserved but not answering')
+  expect(host.files.get(STATUS_FILE) ?? '').not.toContain('tailnet')
+})
+
+test('a review whose own port is the derived one does not fake its own listener', async ($, on) => {
+  // Two reviews are enough to make this real: the first derives SERVED, and
+  // the second binds SERVED itself on 0.0.0.0. An unanchored port search then
+  // finds the second review's own listener and calls the first published,
+  // republishing the exact `wrong version number` link this probe exists to
+  // withhold. Only `%tailscale0:SERVED` is the tailnet's.
+  const host = setUp(on, [planReview(PORT, SESSION_ID), planReview(SERVED, SESSION_ID)])
+  host.setUnreachable([SERVED])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  const written = JSON.parse(host.files.get(STATUS_FILE) ?? '[]')
+  const first = written.find((entry: { local: string }) => entry.local === `http://localhost:${PORT}`)
+  expect(first?.tailnet).toBeUndefined()
 })

@@ -51,21 +51,25 @@ Measured 2026-10-25 on the author's machine:
 A port of its own is therefore the only arrangement that works whichever way
 the review happened to bind.
 
-### A link is only shown once it answers
+### A link is only shown once its listener exists
 
 The same silent failure means `tailscale serve status` is not evidence a URL
-loads. Every tailnet link is fetched first and is written to the hint line and
-the status file only when the request answers; a reservation that does not is
-taken down and republished on the next sync. Any HTTP status counts — a `403`
-from Plannotator's Host allowlist is a live listener just like a `200`. A
-refusal by the host's own fetch policy reads as unreachable, so the link is
-withheld rather than guessed at: the localhost link is always still there.
+loads. A link is written to the hint line and the status file only once
+`ss -ltn` shows the listener tailscaled creates — `<ip>%tailscale0:<port>`.
+
+That is deliberately a local read and not a fetch of the URL: `$.http.fetch`
+to the tailnet name is refused outright in some sessions (a web-fetch policy,
+or an unattended one), which would withhold a link that works. The interface
+anchor matters too — the probe must not match the review's own `0.0.0.0:<port>`
+listener, which is present even when the tailnet reservation failed. A
+reservation whose listener never appears is taken down and retried on the next
+sync, and the localhost link is drawn meanwhile.
 
 ## Hint line
 
 While a review of this session's is live, the newest one is drawn on the hint
 line under the prompt — `review` and a short link, `tailnet` when the port is
-published and answers, `local` when only the loopback URL is known. Nothing is
+published with its listener up, `local` when only the loopback URL is known. Nothing is
 drawn when no review is live. This needs no settings entry and no per-machine
 script: it installs with the plugin.
 
@@ -93,7 +97,7 @@ date, so a `statusLine` command of your own can draw the same links:
 ```
 
 `tailnet` is present only while `tailscale serve` publishes the port **and the
-listener answers**; the list is empty once no review is live. Read it with the
+listener exists**; the list is empty once no review is live. Read it with the
 `session_id` stdin gives you:
 
 ```bash

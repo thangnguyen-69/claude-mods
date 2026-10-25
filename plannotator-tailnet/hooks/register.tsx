@@ -297,33 +297,42 @@ async function unpublish($: Engine, status: Servings, reviewPort: number): Promi
 }
 
 /**
- * The tailnet ports this mod has seen answer, so a live review is not re-probed
+ * The tailnet ports this mod has seen serve, so a live review is not re-probed
  * on every tick. A publish drops its own entry first, so a re-publish re-checks.
  */
 const reachable = new Set<number>()
 
 /**
- * Whether `https://<host>:<port>/` really answers.
+ * Whether `tailscale serve` has really taken `port` on the tailnet.
  *
- * `tailscale serve status` is not evidence: a reservation that failed still
+ * `tailscale serve status` is not evidence: a reservation that fails still
  * prints, so a link built from it looks published while every request to it
- * dies with `wrong version number`. Only a request settles it, and any HTTP
- * answer counts — a `403` from Plannotator's Host allowlist is a live listener,
- * exactly like a `200`. A `000` is not an answer either, so a refusal by the
- * host's own fetch policy reads as unreachable and the link is withheld: a
- * missing link is recoverable, a link that never loads is what was reported.
+ * dies with `wrong version number`. What does settle it is the listener the
+ * tailscaled side creates — `ss` shows
+ * `<tailscale-ip>%tailscale0:<port>` for a port that serves, and nothing for
+ * one whose reservation silently failed. That is a local read, so it needs no
+ * network and cannot be refused by the host's fetch policy:
+ * `$.http.fetch` to the tailnet URL is refused outright in some sessions,
+ * which would withhold a link that works.
+ *
+ * `ss` absent, or its output unreadable, is reported as not serving — the
+ * localhost link is still drawn, and a missing tailnet link is recoverable
+ * where a link that never loads is what gets reported as broken.
  */
-async function serves($: Engine, host: string, port: number): Promise<boolean> {
+async function serves($: Engine, port: number): Promise<boolean> {
   if (reachable.has(port)) return true
-  try {
-    const answer = await $.http.fetch(urlFor(host, port))
-    // Any status at all means the TLS listener and its proxy are up.
-    if (typeof answer.status !== 'number' || answer.status === 0) return false
-    reachable.add(port)
-    return true
-  } catch {
-    return false
-  }
+
+  const listing = await run($, ['ss', '-ltn'], 10000)
+  if (!listing.isOk) return false
+
+  // `<addr>%tailscale0:<port>` — the interface anchor matters: the review's
+  // own `0.0.0.0:<port>` listener is a different, useless line that matches on
+  // a bare port search.
+  const listener = new RegExp(`\\S*%tailscale0:${port}\\s`)
+  if (!listener.test(listing.stdout)) return false
+
+  reachable.add(port)
+  return true
 }
 
 /**
@@ -470,7 +479,7 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
         // entry has since gone. Either way it is the mapping a live review of
         // this session's wants, so it is adopted rather than duplicated.
         ours.add(port)
-        if (!(await serves($, status.host, served))) {
+        if (!(await serves($, served))) {
           // Reserved but not answering: take it down so the retry below
           // republishes, instead of showing a link that never loads.
           reachable.delete(served)
@@ -498,7 +507,7 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
     ours.add(port)
     // The link is only written once the listener answers: a reservation `serve`
     // accepted is not proof it serves.
-    if (await serves($, status.host, served)) {
+    if (await serves($, served)) {
       report.published.push(urlFor(status.host, served))
       shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, served) })
     } else {
