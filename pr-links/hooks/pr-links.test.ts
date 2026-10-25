@@ -8,7 +8,7 @@ import {
   extractPrLinks,
   mergeLinks,
   parsePrUrl,
-  statusLink,
+  statusLinks,
 } from './format'
 
 const FORGEJO_PR = 'https://git.lumora.bio/A80Lab/lumora-landingpage/pulls/27'
@@ -94,31 +94,54 @@ test('keeps the newest links and lets the oldest fall off', () => {
   }))
 
   // Printed order is oldest-first, so the last two a command said are the
-  // newest: those lead, and the earliest fall off the end.
-  expect(mergeLinks([], links).map(link => link.number)).toEqual(['6', '5', '4', '3', '2'])
+  // newest: those lead, and the oldest fall off the end. What fell off is
+  // counted rather than silently lost.
+  expect(mergeLinks([], links).links.map(link => link.number)).toEqual(['6', '5', '4', '3', '2'])
+  expect(mergeLinks([], links).dropped).toBe(0)
   // A later find goes in front of what was already known.
-  expect(mergeLinks(links.slice(0, 2), links.slice(2, 3)).map(link => link.number)).toEqual(['2', '0', '1'])
+  expect(mergeLinks(links.slice(0, 2), links.slice(2, 3)).links.map(link => link.number)).toEqual(['2', '0', '1'])
   // A repeat keeps one entry.
-  expect(mergeLinks(links.slice(0, 1), links.slice(0, 1))).toHaveLength(1)
+  expect(mergeLinks(links.slice(0, 1), links.slice(0, 1)).links).toHaveLength(1)
+})
+
+test('more links than the band shows are counted, not silently dropped', () => {
+  const many = Array.from({ length: MAX_KEPT + 3 }, (_, i) => ({
+    url: `https://github.com/acme/widgets/pull/${i}`,
+    host: 'github.com',
+    repo: 'acme/widgets',
+    number: String(i),
+    kind: 'pull' as const,
+  }))
+
+  const merged = mergeLinks([], many)
+  expect(merged.links).toHaveLength(MAX_KEPT)
+  // The three oldest are the ones that did not fit, and the band says so.
+  expect(merged.dropped).toBe(3)
+  expect(statusLinks({ ...EMPTY, links: merged.links, dropped: merged.dropped }).at(-1)).toEqual({
+    label: '+3 more',
+  })
 })
 
 test('label and URL stay separate fields, never one string', () => {
-  expect(statusLink(EMPTY)).toBeUndefined()
-  expect(statusLink({ ...EMPTY, isHidden: true, links: extractPrLinks(FORGEJO_PR) })).toBeUndefined()
+  expect(statusLinks(EMPTY)).toEqual([])
+  expect(statusLinks({ ...EMPTY, isHidden: true, links: extractPrLinks(FORGEJO_PR) })).toEqual([])
 
-  expect(statusLink({ ...EMPTY, links: extractPrLinks(FORGEJO_PR) })).toEqual({
-    label: 'PR #27',
-    url: FORGEJO_PR,
-    older: 0,
-  })
-  expect(statusLink({ ...EMPTY, links: extractPrLinks(`${GITHUB_PR} ${FORGEJO_PR}`) })).toEqual({
-    label: 'PR #412',
-    url: GITHUB_PR,
-    older: 1,
-  })
+  // The repository names the pull request; `#27` alone is ambiguous once a
+  // session has opened one against more than one repository.
+  expect(statusLinks({ ...EMPTY, links: extractPrLinks(FORGEJO_PR) })).toEqual([
+    { label: 'lumora-landingpage #27', url: FORGEJO_PR },
+  ])
 
-  // A merge request is called what its host calls it.
-  expect(statusLink({ ...EMPTY, links: extractPrLinks(GITLAB_MR) })?.label).toBe('MR #88')
+  // Every remembered link is drawn, newest first — not the newest plus a count.
+  // The count hid which pull requests the older ones were, which is the only
+  // reason they are kept.
+  expect(statusLinks({ ...EMPTY, links: extractPrLinks(`${GITHUB_PR} ${FORGEJO_PR}`) })).toEqual([
+    { label: 'lumora-landingpage #27', url: FORGEJO_PR },
+    { label: 'widgets #412', url: GITHUB_PR },
+  ])
+
+  // A merge request reads the same way: the repository, then its number.
+  expect(statusLinks({ ...EMPTY, links: extractPrLinks(GITLAB_MR) })[0]?.label).toBe('widgets #88')
 })
 
 /** The engine's own answers for what the mod calls and nothing beneath it serves. */
@@ -162,7 +185,9 @@ function answerBash(on: On, output: string, init?: { isError?: true }): void {
 /**
  * The band as the mod draws it, read through the engine's own render call.
  */
-async function drawBand($: Engine): Promise<{ href?: string; label?: string }> {
+async function drawBand(
+  $: Engine,
+): Promise<{ href?: string; label?: string; all: { href?: string; label?: string }[] }> {
   const drawn = await $.ui.render({
     surface: 'terminal',
     component: 'PromptHint',
@@ -177,8 +202,15 @@ async function drawBand($: Engine): Promise<{ href?: string; label?: string }> {
   }
   walk(drawn)
 
-  const link = nodes.find(node => node.type === 'Link')
-  return { href: link?.props?.href, label: link?.props?.label }
+  const links = nodes.filter(node => node.type === 'Link')
+  const first = links[0]
+  return {
+    href: first?.props?.href,
+    label: first?.props?.label,
+    // Every link drawn, in order — the band shows all of them, not the newest
+    // plus a count.
+    all: links.map(link => ({ href: link.props?.href, label: link.props?.label })),
+  }
 }
 
 test('a Bash call that prints a PR URL puts it on the hint line as a link', async ($, on) => {
@@ -190,7 +222,22 @@ test('a Bash call that prints a PR URL puts it on the hint line as a link', asyn
 
   const band = await drawBand($)
   expect(band.href).toBe(FORGEJO_PR)
-  expect(band.label).toBe('PR #27')
+  expect(band.label).toBe('lumora-landingpage #27')
+})
+
+test('several pull requests are each drawn, not collapsed into a count', async ($, on) => {
+  setUp(on)
+  // Both printed by the same command: the band must show both, newest first.
+  answerBash(on, `${GITHUB_PR}\n${FORGEJO_PR}\n`)
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr list' })
+
+  const band = await drawBand($)
+  expect(band.all).toEqual([
+    { href: FORGEJO_PR, label: 'lumora-landingpage #27' },
+    { href: GITHUB_PR, label: 'widgets #412' },
+  ])
 })
 
 test('nothing with ESC bytes ever reaches the status line', async ($, on) => {
@@ -298,7 +345,7 @@ test('a resumed session restores the link a previous process stored', async ($, 
   // because `session.start` read it back out of the store.
   const band = await drawBand($)
   expect(band.href).toBe(FORGEJO_PR)
-  expect(band.label).toBe('PR #27')
+  expect(band.label).toBe('lumora-landingpage #27')
 })
 
 test('a stored link hidden by /pr resumes hidden', async ($, on) => {

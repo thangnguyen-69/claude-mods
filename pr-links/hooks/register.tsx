@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PrLinks } from '../types'
-import { EMPTY, extractPrLinks, mergeLinks, statusLink } from './format'
+import { EMPTY, extractPrLinks, mergeLinks, statusLinks } from './format'
 
 const prLinks = atom({ plugin: 'pr-links', key: 'prLinks' } as const, EMPTY)
 
@@ -60,16 +60,25 @@ export const register: Register = on => {
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const drawn = await next(e)
 
-    const link = statusLink(await read($, prLinks))
-    if (link === undefined) return drawn
+    const links = statusLinks(await read($, prLinks))
+    if (links.length === 0) return drawn
 
+    // Separated by a dim bullet rather than a bare space: with several links the
+    // space alone leaves `infra #167 infra #168` reading as one run.
     const { Box, Link, Text } = $.ui.resolve(e)
     return (
       <Box>
         {drawn as never}
         <Text> </Text>
-        <Link href={link.url} label={link.label} />
-        {link.older > 0 && <Text dimColor> +{link.older}</Text>}
+        {/* Flat, not a fragment per link: the render tree is built from the
+            engine's own elements, and a bare `<>` is not one of them. An entry
+            with no URL is the `+N more` count, which is text rather than a link. */}
+        {links.flatMap((link, index) => [
+          ...(index > 0 ? [<Text key={`sep-${index}`} dimColor> · </Text>] : []),
+          link.url === undefined
+            ? <Text key={`more-${index}`} dimColor>{link.label}</Text>
+            : <Link key={link.url} href={link.url} label={link.label} />,
+        ])}
       </Box>
     )
   })
@@ -89,10 +98,12 @@ export const register: Register = on => {
     const found = extractPrLinks(output)
     if (found.length === 0) return ran
 
-    await update($, prLinks, current => ({
-      ...current,
-      links: mergeLinks(current.links, found),
-    }))
+    await update($, prLinks, current => {
+      const merged = mergeLinks(current.links, found)
+      // Keep the largest count seen: a later command must not make an earlier
+      // overflow look like it never happened.
+      return { ...current, links: merged.links, dropped: Math.max(current.dropped ?? 0, merged.dropped) }
+    })
     await save($)
     $.ui.invalidate('ui.render')
 
@@ -163,8 +174,9 @@ async function restore($: EngineInterface): Promise<void> {
     if (!isPrLinks(stored)) return
 
     await update($, prLinks, current => ({
-      links: mergeLinks(current.links, stored.links),
+      links: mergeLinks(current.links, stored.links).links,
       isHidden: stored.isHidden,
+      dropped: Math.max(current.dropped ?? 0, stored.dropped ?? 0),
     }))
   } catch {
     // Nothing stored, or nothing readable: start empty.
@@ -179,8 +191,10 @@ async function restore($: EngineInterface): Promise<void> {
  */
 function isPrLinks(value: unknown): value is PrLinks {
   if (typeof value !== 'object' || value === null) return false
-  const { links, isHidden } = value as { links?: unknown; isHidden?: unknown }
+  const { links, isHidden, dropped } = value as { links?: unknown; isHidden?: unknown; dropped?: unknown }
   if (!Array.isArray(links) || typeof isHidden !== 'boolean') return false
+
+  if (dropped !== undefined && typeof dropped !== 'number') return false
 
   return links.every((link) => {
     if (typeof link !== 'object' || link === null) return false

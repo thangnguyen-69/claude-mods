@@ -15,10 +15,16 @@ session. It needs nothing else — no token, no forge configuration.
 
 ## What it does
 
-Hooks `tool.call` for `Bash`. When a command's output names a pull request URL,
-the newest one is drawn on the hint line as a `Link` — `PR #27`, opening the
-forge. Older ones are remembered (up to five) and counted as `+2` so
-a session that opened several keeps the trail.
+Hooks `tool.call` for `Bash`. When a command's output names pull request URLs,
+each is drawn on the hint line as its own `Link` — `lumora-infra #170` — newest
+first, up to eight, separated by a dim `·`, so a session that opened several
+keeps the trail and you can see *which* ones they are. Anything past the eighth
+is counted as a dim `+3 more` rather than dropped silently.
+
+The label is the repository's own name plus the number, not `PR #170`: a session
+usually works in one repository, but the moment it opens pull requests against
+two, a bare number is ambiguous and an owner prefix is noise. Without a number
+in the URL the repository alone is drawn; without a repository, the host.
 
 `next(e)` is drawn beside the link rather than replaced: that tree is the
 engine's own hint line, and dropping it would trade one useful line for another.

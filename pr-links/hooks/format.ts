@@ -1,7 +1,15 @@
 import type { PrLinks, PullRequest } from '../types'
 
-/** Newest first, and only this many: the band has room for one. */
-export const MAX_KEPT = 5
+/**
+ * Newest first, and only this many.
+ *
+ * Raised from one: the band used to have room for a single link plus a count,
+ * which meant the count hid *which* pull requests the older ones were — the only
+ * reason to remember them. Eight is enough for a normal multi-PR session and
+ * still bounded; anything beyond it is announced rather than dropped silently
+ * (see `statusLinks`).
+ */
+export const MAX_KEPT = 8
 
 /** What the line and `/pr` draw before any command has printed a URL. */
 export const EMPTY: PrLinks = { links: [], isHidden: false }
@@ -100,24 +108,44 @@ export function extractPrLinks(output: string): PullRequest[] {
  *
  * `found` arrives in printed order, so its last entry is the newest thing this
  * command said — that is what goes in front. `existing` is already newest-first.
+ *
+ * `dropped` counts what fell off the end so the band can say so. Silently
+ * losing a link is worse than showing a count: it looks like the session only
+ * ever opened `MAX_KEPT` of them.
  */
-export function mergeLinks(existing: readonly PullRequest[], found: readonly PullRequest[]): PullRequest[] {
+export function mergeLinks(
+  existing: readonly PullRequest[],
+  found: readonly PullRequest[],
+): { links: PullRequest[]; dropped: number } {
   const byUrl = new Map<string, PullRequest>()
   for (const link of [...[...found].reverse(), ...existing]) {
     if (!byUrl.has(link.url)) byUrl.set(link.url, link)
   }
 
-  return [...byUrl.values()].slice(0, MAX_KEPT)
-}
-
-/** What the host calls its pull requests, for the label. */
-function kindLabel(kind: PullRequest['kind']): string {
-  return kind === 'merge_request' ? 'MR' : 'PR'
+  const all = [...byUrl.values()]
+  return { links: all.slice(0, MAX_KEPT), dropped: Math.max(0, all.length - MAX_KEPT) }
 }
 
 /**
- * What the band draws: label and URL as **separate fields**, or undefined for
- * nothing.
+ * The repository's own name, for the label: the last segment of `<owner>/<repo>`.
+ *
+ * A session usually works in one repository, so `#170` alone would be ambiguous
+ * the moment it opens a PR against two — which this one does. The owner is left
+ * out because it is the same for every repository in an org and only makes the
+ * line longer.
+ */
+function repoName(link: PullRequest): string | undefined {
+  const name = link.repo?.split('/').filter(segment => segment !== '').at(-1)
+  return name === undefined || name === '' ? undefined : name
+}
+
+/**
+ * What the band draws: one entry per remembered pull request, newest first,
+ * label and URL as **separate fields**. Empty when there is nothing to show.
+ *
+ * Every link is drawn rather than the newest plus a count, because the count
+ * hides which pull requests the older ones are — the reason to remember them at
+ * all.
  *
  * The URL must never be concatenated into a string handed to `$.ui.status`.
  * That call takes plain text, and raw ESC bytes in it make the engine emit a
@@ -125,16 +153,26 @@ function kindLabel(kind: PullRequest['kind']): string {
  * support OSC 8; the status field is what refuses it cleanly. A `Link` element
  * is the documented hyperlink and the engine escapes it itself.
  */
-export function statusLink(state: PrLinks): { label: string; url: string; older: number } | undefined {
-  if (state.isHidden) return undefined
+export function statusLinks(state: PrLinks): { label: string; url?: string }[] {
+  if (state.isHidden) return []
+  if (state.links.length === 0) return []
 
-  const newest = state.links[0]
-  if (newest === undefined) return undefined
+  const drawn: { label: string; url?: string }[] = state.links.map(link => {
+    // `<repo> #<number>`, e.g. `lumora-infra #170`. Without a number the
+    // repository alone is all there is to say; without a repository the host
+    // is the only thing that distinguishes it.
+    const name = repoName(link) ?? link.host
+    return {
+      label: link.number === undefined ? name : `${name} #${link.number}`,
+      url: link.url,
+    }
+  })
 
-  return {
-    label: newest.number === undefined ? kindLabel(newest.kind) : `${kindLabel(newest.kind)} #${newest.number}`,
-    url: newest.url,
-    older: state.links.length - 1,
-  }
+  // What fell off the end is announced, not swallowed: a session that opened
+  // more than `MAX_KEPT` would otherwise look like it opened exactly that many.
+  const dropped = state.dropped ?? 0
+  if (dropped > 0) drawn.push({ label: `+${dropped} more` })
+
+  return drawn
 }
 

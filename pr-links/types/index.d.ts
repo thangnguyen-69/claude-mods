@@ -18,6 +18,14 @@ export type PrLinks = {
   links: PullRequest[];
   /** Whether `/pr` took the line down. */
   isHidden: boolean;
+  /**
+   * How many older links did not fit, so the band can say `+N more` instead of
+   * silently looking like the session opened only `MAX_KEPT`.
+   *
+   * Optional: a value an older version stored has no such field, and an absent
+   * count is zero.
+   */
+  dropped?: number;
 };
 
 declare module 'claude-code' {
