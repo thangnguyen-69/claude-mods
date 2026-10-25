@@ -408,22 +408,30 @@ async function homeDir($: Engine): Promise<string | null> {
 let written: { path: string; text: string } | undefined
 
 /**
- * What the hint line draws: this session's newest live review, or null.
+ * What the band draws: every live review of this session's, newest first.
  *
  * Held in the module rather than `$.state` because only the render hook reads
  * it and only `writeStatus` writes it — one writer, one reader, no subscription
  * to set up. A hot reload re-evaluates the module, and the next sync fills it
  * in again.
+ *
+ * Every entry, not `entries[0]`: a session can have several reviews live at
+ * once, and drawing one of them silently hid the rest. `pr-links` had the same
+ * defect and the same fix.
  */
-let hint: StatusEntry | null = null
+let live: StatusEntry[] = []
+
+/** Whether two lists would draw the same rows, so a no-op sync repaints nothing. */
+function sameEntries(a: readonly StatusEntry[], b: readonly StatusEntry[]): boolean {
+  return a.length === b.length && a.every((entry, i) => entry.local === b[i]?.local && entry.label === b[i]?.label && entry.tailnet === b[i]?.tailnet)
+}
 
 /** Writes this session's reviews for the status line command; an empty list when none is live. */
 async function writeStatus($: Engine, tag: string | null, entries: StatusEntry[]): Promise<void> {
-  // The hint line is fed here too: this is the one place a sync's list of live
+  // The band is fed here too: this is the one place a sync's list of live
   // reviews arrives, so the two views cannot disagree.
-  const newest = entries[0] ?? null
-  const changed = hint?.local !== newest?.local
-  hint = newest
+  const changed = !sameEntries(live, entries)
+  live = entries
   if (changed) $.ui.invalidate('ui.render')
 
   if (tag === null) return
@@ -564,7 +572,14 @@ async function syncOnce($: Engine, announce: boolean): Promise<Report | undefine
 }
 
 export const register: Register = (on, options) => {
-  // Drawn on the hint line under the prompt, beside the engine's own hint.
+  // Drawn in the band directly above the prompt, not on the hint line under it.
+  //
+  // `PromptHint` is a single line shared by every plugin — each one composes its
+  // tree around `next(e)` — so a review link there competes for the same row as
+  // everything else that draws one, and cannot show more than a line's worth.
+  // `AbovePrompt` is its own multi-row site with `maxRows` and scrolling, which
+  // is what a list of live reviews needs. The desktop sidebar keeps the hint
+  // line to itself as a result.
   //
   // 0.3.0 wrote the JSON and left a `statusLine` command to draw it, but a
   // plugin cannot ship that key (the manifest rejects `statusLine`) and
@@ -572,23 +587,31 @@ export const register: Register = (on, options) => {
   // plus this machine's own session-id path. A render hook is portable: it
   // installs with the plugin and needs nothing of the person's settings.
   //
-  // `next(e)` is kept and drawn beside the link rather than replaced — that
-  // tree is the engine's own hint line, and dropping it would trade one useful
-  // line for another.
-  //
-  // The label is short on purpose. A `Link` with no label draws the whole URL
-  // as its text, which for a tailnet URL is longer than the rest of the line
-  // put together; `tailnet` is the word that says which of the two links it is.
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+  // One row per review, each labelled with the review's own `<project> (<mode>)`
+  // and its transport: the old line said only `tailnet`/`local`, which named how
+  // to reach a review but not which one it was. A `Link` still needs a label — a
+  // bare one draws the whole URL, longer than the rest of the row.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const drawn = await next(e)
-    if (hint === null) return drawn
+    // A survey owns the band while it is up; drawing under it would stack two
+    // unrelated things in the same place.
+    if (live.length === 0 || e.props.hasSurvey) return drawn
 
     const { Box, Link, Text } = $.ui.resolve(e)
     return (
-      <Box>
+      <Box flexDirection="column">
         {drawn as never}
-        <Text dimColor> review </Text>
-        <Link href={hint.tailnet ?? hint.local} label={hint.tailnet === undefined ? 'local' : 'tailnet'} />
+        {/* One row per review rather than one run of links: the band is a list,
+            and a wrapped run would not say where one review ends. */}
+        {live.map(entry => {
+          const tailnet = entry.tailnet !== undefined
+          return (
+            <Box key={entry.local} flexDirection="row">
+              <Text dimColor>review </Text>
+              <Link href={tailnet ? entry.tailnet! : entry.local} label={`${entry.label} · ${tailnet ? 'tailnet' : 'local'}`} />
+            </Box>
+          )
+        })}
       </Box>
     )
   })

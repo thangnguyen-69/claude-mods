@@ -54,7 +54,7 @@ the review happened to bind.
 ### A link is only shown once its listener exists
 
 The same silent failure means `tailscale serve status` is not evidence a URL
-loads. A link is written to the hint line and the status file only once
+loads. A link is drawn in the band and written to the status file only once
 `ss -ltn` shows the listener tailscaled creates — `<ip>%tailscale0:<port>`.
 
 That is deliberately a local read and not a fetch of the URL: `$.http.fetch`
@@ -65,21 +65,24 @@ listener, which is present even when the tailnet reservation failed. A
 reservation whose listener never appears is taken down and retried on the next
 sync, and the localhost link is drawn meanwhile.
 
-## Hint line
+## The band above the prompt
 
-While a review of this session's is live, the newest one is drawn on the hint
-line under the prompt — `review` and a short link, `tailnet` when the port is
-published with its listener up, `local` when only the loopback URL is known. Nothing is
-drawn when no review is live. This needs no settings entry and no per-machine
-script: it installs with the plugin.
+While reviews of this session's are live, each is drawn as its own row in the
+band directly above the prompt input — `review` and a link labelled
+`<project> (<mode>) · tailnet`, or `· local` when only the loopback URL is known.
+One row per review, so several live at once are all visible. Nothing is drawn
+when no review is live, and the band is yielded to a survey while one is up.
 
-The link is labelled rather than drawn bare: a `Link` with no label uses the
-whole URL as its text, and a tailnet URL is longer than the rest of the hint
-line put together.
+This is the `AbovePrompt` site rather than the hint line under the prompt. The
+hint line is a **single shared row**: every plugin that draws there composes its
+tree around `next(e)`, so a link there competes for the same line and cannot show
+a list. `AbovePrompt` is a multi-row site with `maxRows` and scrolling, which is
+what several live reviews need — and it leaves the hint line to everything else.
 
-It is drawn by a `ui.render` hook on `PromptHint`, beside the engine's own hint
-rather than replacing it — that tree carries the key hints and pills, and
-dropping it would trade one useful line for another.
+Each link is labelled rather than drawn bare: a `Link` with no label uses the
+whole URL as its text, and a tailnet URL is longer than the rest of the row. The
+label names the review *and* how to reach it — earlier versions said only
+`tailnet`/`local`, which could not tell two live reviews apart.
 
 An earlier version wrote the links to a JSON file and left a `statusLine`
 command to draw it. That could not work on its own: a plugin **cannot** ship a

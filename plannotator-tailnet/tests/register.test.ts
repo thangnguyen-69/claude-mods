@@ -1,4 +1,5 @@
 import type { On, ProcessRunResult } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
 const HOST = 'demo.tailnet.ts.net'
@@ -172,9 +173,9 @@ function setUp(on: On, sessions: readonly unknown[], entries?: Readonly<Record<s
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
-  // The engine's own hint line, empty: the mod draws this beside its link and
-  // returns it unchanged when no review is live.
-  on('ui.render', { component: 'PromptHint' }, () => h(Fragment, null) as never)
+  // The engine's own band, empty: the mod draws its rows under this and returns
+  // it unchanged when no review is live.
+  on('ui.render', { component: 'AbovePrompt' }, () => h(Fragment, null) as never)
 
   return fakeHost(on, sessions)
 }
@@ -368,17 +369,13 @@ test('off empties the status file', async ($, on) => {
   expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([])
 })
 
-test('draws the newest review on the hint line, tailnet link first', async ($, on) => {
-  setUp(on, [planReview(PORT, SESSION_ID)])
-
-  await $.session.start({ ...SESSION })
-  await $.command.run({ ...COMMAND })
-
+/** The band as the mod draws it: every Link in the tree, in order. */
+async function drawBand($: Engine): Promise<{ href?: string; label?: string }[]> {
   const drawn = await $.ui.render({
     surface: 'terminal',
-    component: 'PromptHint',
-    props: { isDraft: false, isWorking: false, hint: '' },
-    requestId: 'hint',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { offset: 0, bodyRows: 6 }, view: {} },
+    requestId: 'band',
   } as never)
 
   const nodes: any[] = []
@@ -389,11 +386,19 @@ test('draws the newest review on the hint line, tailnet link first', async ($, o
   }
   walk(drawn)
 
-  const link = nodes.find(node => node.type === 'Link')
-  expect(link?.props?.href).toBe(`https://${HOST}:${SERVED}/`)
-  // Labelled: a `Link` with no label draws the whole URL, which is longer than
-  // the rest of the hint line.
-  expect(link?.props?.label).toBe('tailnet')
+  return nodes.filter(node => node.type === 'Link').map(node => ({ href: node.props?.href, label: node.props?.label }))
+}
+
+test('draws a live review in the band above the prompt, named and with its transport', async ($, on) => {
+  setUp(on, [planReview(PORT, SESSION_ID)])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  // The review's own label, then how it is reachable: `tailnet` and `local` alone
+  // named the transport but not the review, so two live reviews were
+  // indistinguishable.
+  expect(await drawBand($)).toEqual([{ href: `https://${HOST}:${SERVED}/`, label: 'demo (plan) · tailnet' }])
 })
 
 test('labels the link "local" while only the loopback URL is known', async ($, on) => {
@@ -403,37 +408,36 @@ test('labels the link "local" while only the loopback URL is known', async ($, o
   await $.session.start({ ...SESSION })
   await $.command.run({ ...COMMAND })
 
-  const drawn = await $.ui.render({
-    surface: 'terminal',
-    component: 'PromptHint',
-    props: { isDraft: false, isWorking: false, hint: '' },
-    requestId: 'hint',
-  } as never)
-
-  const nodes: any[] = []
-  const walk = (node: any): void => {
-    if (node === null || typeof node !== 'object') return
-    nodes.push(node)
-    for (const child of node.children ?? []) walk(child)
-  }
-  walk(drawn)
-
-  const link = nodes.find(node => node.type === 'Link')
-  expect(link?.props?.href).toBe(`http://localhost:${PORT}`)
-  expect(link?.props?.label).toBe('local')
+  expect(await drawBand($)).toEqual([{ href: `http://localhost:${PORT}`, label: 'demo (plan) · local' }])
 })
 
-test('draws nothing on the hint line before a review is live', async ($, on) => {
-  setUp(on, [])
+test('draws every live review, not only the newest', async ($, on) => {
+  // Two reviews of this session's, as a session that opened a plan and a diff
+  // review has. The old line drew entries[0] and hid the other completely.
+  setUp(on, [planReview(PORT, SESSION_ID), planReview(PORT + 1, SESSION_ID)])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  const links = await drawBand($)
+  expect(links).toHaveLength(2)
+  expect(links.map(link => link.href)).toEqual([
+    `https://${HOST}:${SERVED}/`,
+    `https://${HOST}:${SERVED + 1}/`,
+  ])
+})
+
+test('yields the band to a survey rather than stacking under it', async ($, on) => {
+  setUp(on, [planReview(PORT, SESSION_ID)])
 
   await $.session.start({ ...SESSION })
   await $.command.run({ ...COMMAND })
 
   const drawn = await $.ui.render({
     surface: 'terminal',
-    component: 'PromptHint',
-    props: { isDraft: false, isWorking: false, hint: '' },
-    requestId: 'hint',
+    component: 'AbovePrompt',
+    props: { hasSurvey: true, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { offset: 0, bodyRows: 6 }, view: {} },
+    requestId: 'band',
   } as never)
 
   const nodes: any[] = []
@@ -445,6 +449,15 @@ test('draws nothing on the hint line before a review is live', async ($, on) => 
   walk(drawn)
 
   expect(nodes.find(node => node.type === 'Link')).toBeUndefined()
+})
+
+test('draws nothing in the band before a review is live', async ($, on) => {
+  setUp(on, [])
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  expect(await drawBand($)).toEqual([])
 })
 
 test('re-publishes a reservation that is standing but does not answer', async ($, on) => {
