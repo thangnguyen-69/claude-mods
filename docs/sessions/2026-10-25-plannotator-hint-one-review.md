@@ -75,3 +75,24 @@ review was given `PLANNOTATOR_PORT=1956x` instead.
 
 Consequence worth remembering: **the MCP tool cannot open concurrent sessions in
 this setup; the CLI with `PLANNOTATOR_PORT` can.**
+
+## Follow-up: done in 0.6.0, and the site changed
+
+Sire asked two things after the diagnosis: whether the two plugins could live on
+different lines, and to make this one return multiple links like pr-links.
+
+**Different lines: yes, by using a different site, not a second row.** The hint
+line is one instance shared by every plugin — each composes its tree around
+`next(e)` — so pr-links and plannotator-tailnet were competing for the same row.
+`AbovePrompt` is a separate multi-row band with `maxRows` and scrolling, raised
+alongside `PromptHint`. Reviews moved there; PR links stayed on the hint line.
+`pr-links` did not need a change.
+
+**Multiple links: done.** `let hint: StatusEntry | null` became
+`let live: StatusEntry[]`, `entries[0]` became `entries` (all of them), and each
+is drawn as its own row labelled `<project> (<mode>) · tailnet|local`. A survey
+owns the band while it is up, so the hook yields to it rather than stacking.
+
+One thing worth recording for the next plugin that draws here: `e.props` carries
+the component's props, not the event — `e.hasSurvey` is `e.props.hasSurvey`.
+The type error is how that surfaced.
