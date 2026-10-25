@@ -10,12 +10,17 @@ import type { StatusEntry } from '../types'
  * This mod watches `plannotator sessions --json` and, for every live session
  * this Claude session started, runs
  *
- *   tailscale serve --bg --https=<port> http://127.0.0.1:<port>
+ *   tailscale serve --bg --https=<port + 1000> http://127.0.0.1:<port>
  *
- * so the same review opens at `https://<host>.<tailnet>.ts.net:<port>`, and
- * writes this session's reviews (localhost and tailnet URL) to
+ * so the same review opens at `https://<host>.<tailnet>.ts.net:<port + 1000>`,
+ * and writes this session's reviews (localhost and tailnet URL) to
  * `~/.claude/plannotator-tailnet/<session id>.json`, which the person's status
  * line command draws as links for as long as the review lives.
+ *
+ * The tailnet listener gets a port of its own rather than the review's: see
+ * `SERVE_OFFSET`. And a link is shown only once a request to it has answered —
+ * `tailscale serve status` prints a reservation that failed, so it is not
+ * evidence that the URL loads (see `serves`).
  *
  * Only this session's own reviews. The `sessions/` registry is machine-wide:
  * every concurrent Claude session would otherwise publish, display and toast
@@ -44,6 +49,33 @@ const POLL_MS = 4000
 const MIN_PORT = 1024
 /** `tailscale serve --https=443` serves on the bare hostname, colliding with the person's own 443. */
 const MAX_PORT = 65535
+
+/**
+ * How far above a review's own port its tailnet listener is put.
+ *
+ * Not the same port: `tailscale serve --https=<port>` cannot take a port that
+ * another process binds on `0.0.0.0`, and Plannotator binds `0.0.0.0:<port>`
+ * unless it was started with `PLANNOTATOR_REMOTE=0` — which is not this mod's
+ * to choose, since the review is opened by Plannotator's own tool. Worse, the
+ * reservation fails *silently*: `tailscale serve status` still prints the
+ * mapping, so `serve` exits 0 and the URL looks published while every `https`
+ * request to it dies with `wrong version number`.
+ *
+ * A port of its own avoids that whichever way the review was bound. Measured
+ * 2026-10-25 on this machine: `0.0.0.0:<p>` served on `<p>` gave `000`,
+ * `127.0.0.1:<p>` served on `<p>` gave `200`, and `0.0.0.0:<p>` served on
+ * `<p>+1000` gave `200`.
+ */
+const SERVE_OFFSET = 1000
+
+/**
+ * The tailnet port a review is published on, or null when there is none it can
+ * take: one past `MAX_PORT` would wrap onto the person's own listener.
+ */
+function publishPort(port: number): number | null {
+  const candidate = port + SERVE_OFFSET
+  return candidate > MIN_PORT && candidate <= MAX_PORT ? candidate : null
+}
 
 const proxyOf = (port: number) => `http://127.0.0.1:${port}`
 
@@ -250,6 +282,51 @@ function urlFor(host: string, port: number): string {
 }
 
 /**
+ * Takes down the mapping standing on `served`, but only while it still points
+ * where this mod put it.
+ *
+ * The port is derived rather than chosen, so it can be one the person is
+ * already serving something else on: that mapping is theirs and stays.
+ */
+async function unpublish($: Engine, status: Servings, reviewPort: number): Promise<boolean> {
+  const served = publishPort(reviewPort)
+  if (served === null) return false
+  if (status.byPort.get(served) !== proxyOf(reviewPort)) return false
+  reachable.delete(served)
+  return (await run($, ['tailscale', 'serve', `--https=${served}`, 'off'], 10000)).isOk
+}
+
+/**
+ * The tailnet ports this mod has seen answer, so a live review is not re-probed
+ * on every tick. A publish drops its own entry first, so a re-publish re-checks.
+ */
+const reachable = new Set<number>()
+
+/**
+ * Whether `https://<host>:<port>/` really answers.
+ *
+ * `tailscale serve status` is not evidence: a reservation that failed still
+ * prints, so a link built from it looks published while every request to it
+ * dies with `wrong version number`. Only a request settles it, and any HTTP
+ * answer counts — a `403` from Plannotator's Host allowlist is a live listener,
+ * exactly like a `200`. A `000` is not an answer either, so a refusal by the
+ * host's own fetch policy reads as unreachable and the link is withheld: a
+ * missing link is recoverable, a link that never loads is what was reported.
+ */
+async function serves($: Engine, host: string, port: number): Promise<boolean> {
+  if (reachable.has(port)) return true
+  try {
+    const answer = await $.http.fetch(urlFor(host, port))
+    // Any status at all means the TLS listener and its proxy are up.
+    if (typeof answer.status !== 'number' || answer.status === 0) return false
+    reachable.add(port)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Removes the mappings a session that has ended left standing.
  *
  * An ended session cannot tidy up after a review it left open — that review
@@ -268,9 +345,7 @@ async function reapOrphans($: Engine, status: Servings, live: Map<number, Live>,
         kept.push(port)
         continue
       }
-      // Still pointing where this plugin put it, or it is not ours to remove.
-      if (status.byPort.get(port) !== proxyOf(port)) continue
-      await run($, ['tailscale', 'serve', `--https=${port}`, 'off'], 10000)
+      await unpublish($, status, port)
     }
 
     if (kept.length > 0) await $.store.set(key, kept)
@@ -304,8 +379,7 @@ async function adoptLegacy($: Engine, status: Servings, live: Map<number, Live>)
     }
 
     // Still pointing where this plugin put it, or it is not ours to remove.
-    if (status.byPort.get(port) !== proxyOf(port)) continue
-    await run($, ['tailscale', 'serve', `--https=${port}`, 'off'], 10000)
+    await unpublish($, status, port)
   }
 
   await $.store.delete(LEGACY_KEY)
@@ -382,28 +456,55 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
   // ever removed.
   const shown: StatusEntry[] = []
   for (const [port, entry] of mine) {
-    const held = status.byPort.get(port)
-    if (held !== undefined) {
-      if (held === proxyOf(port)) {
-        report.serving.push(urlFor(status.host, port))
-        shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, port) })
-      } else {
-        shown.push({ label: entry.label, local: entry.url })
-        report.skipped.push(`:${port} already serves ${held}`)
-      }
+    const served = publishPort(port)
+    if (served === null) {
+      shown.push({ label: entry.label, local: entry.url })
+      report.skipped.push(`:${port} has no tailnet port of its own`)
       continue
     }
 
-    const served = await run($, ['tailscale', 'serve', '--bg', `--https=${port}`, proxyOf(port)])
-    if (!served.isOk) {
-      report.skipped.push(`:${port} ${lastLineOf(served.stderr) || 'serve failed'}`)
+    const held = status.byPort.get(served)
+    if (held !== undefined) {
+      if (held === proxyOf(port)) {
+        // Published by this mod already — by this session, or by one whose
+        // entry has since gone. Either way it is the mapping a live review of
+        // this session's wants, so it is adopted rather than duplicated.
+        ours.add(port)
+        if (!(await serves($, status.host, served))) {
+          // Reserved but not answering: take it down so the retry below
+          // republishes, instead of showing a link that never loads.
+          reachable.delete(served)
+          await run($, ['tailscale', 'serve', `--https=${served}`, 'off'], 10000)
+          report.skipped.push(`:${served} was reserved but does not answer; republishing`)
+        } else {
+          report.serving.push(urlFor(status.host, served))
+          shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, served) })
+          continue
+        }
+      } else {
+        shown.push({ label: entry.label, local: entry.url })
+        report.skipped.push(`:${served} already serves ${held}`)
+        continue
+      }
+    }
+
+    const started = await run($, ['tailscale', 'serve', '--bg', `--https=${served}`, proxyOf(port)])
+    if (!started.isOk) {
+      report.skipped.push(`:${served} ${lastLineOf(started.stderr) || 'serve failed'}`)
       shown.push({ label: entry.label, local: entry.url })
       continue
     }
 
     ours.add(port)
-    report.published.push(urlFor(status.host, port))
-    shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, port) })
+    // The link is only written once the listener answers: a reservation `serve`
+    // accepted is not proof it serves.
+    if (await serves($, status.host, served)) {
+      report.published.push(urlFor(status.host, served))
+      shown.push({ label: entry.label, local: entry.url, tailnet: urlFor(status.host, served) })
+    } else {
+      report.skipped.push(`:${served} reserved but not answering yet`)
+      shown.push({ label: entry.label, local: entry.url })
+    }
   }
 
   // Unwind this session's mappings once the review behind them has ended.
@@ -411,7 +512,7 @@ async function sync($: Engine, announce: boolean): Promise<Report> {
   // end: a review usually outlives the turn that opened it.
   for (const port of [...ours]) {
     if (live.has(port)) continue
-    if ((await run($, ['tailscale', 'serve', `--https=${port}`, 'off'], 10000)).isOk) {
+    if (await unpublish($, status, port)) {
       ours.delete(port)
       report.unpublished.push(port)
     }
@@ -522,10 +623,11 @@ export const register: Register = (on, options) => {
       const tag = await ownTag($)
       const key = STORE_PREFIX + (tag ?? '')
       const ours = tag === null ? [] : [...(await storedPorts($, key))]
+      const status = await serveStatus($)
 
       const stopped: number[] = []
       for (const port of ours) {
-        if ((await run($, ['tailscale', 'serve', `--https=${port}`, 'off'], 10000)).isOk) stopped.push(port)
+        if (status !== null && (await unpublish($, status, port))) stopped.push(port)
       }
       if (tag !== null) await $.store.delete(key)
       await writeStatus($, tag, [])

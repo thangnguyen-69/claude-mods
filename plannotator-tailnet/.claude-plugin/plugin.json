@@ -1,6 +1,6 @@
 {
   "name": "plannotator-tailnet",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Publishes this Claude session's own live Plannotator reviews on the tailnet, and draws them on the hint line under the prompt",
   "author": {
     "name": "Thang Nguyen"

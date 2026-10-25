@@ -23,20 +23,51 @@ watches `plannotator sessions --json` every 4 seconds and, for every live
 session **this Claude session started**, runs:
 
 ```
-tailscale serve --bg --https=<port> http://127.0.0.1:<port>
+tailscale serve --bg --https=<port + 1000> http://127.0.0.1:<port>
 ```
 
-The review is then open at `https://<host>.<tailnet>.ts.net:<port>` — tailnet
-only, never public. When a Plannotator review is opened through the tool, the
-URL is toasted as well.
+The review is then open at `https://<host>.<tailnet>.ts.net:<port + 1000>` —
+tailnet only, never public. When a Plannotator review is opened through the
+tool, the URL is toasted as well.
+
+### Why the tailnet port is not the review's own port
+
+`tailscale serve --https=<port>` cannot take a port another process binds on
+`0.0.0.0`, and Plannotator binds `0.0.0.0:<port>` unless it was started with
+`PLANNOTATOR_REMOTE=0` — which is not this mod's to choose, because the review
+is opened by Plannotator's own tool. The reservation then fails **silently**:
+`tailscale serve status` still prints the mapping, so `serve` exits 0 and the
+URL looks published while every `https` request to it dies with
+`wrong version number`.
+
+Measured 2026-10-25 on the author's machine:
+
+| backing bind | served on | tailnet answer |
+| --- | --- | --- |
+| `0.0.0.0:<p>` | `<p>` | **000** |
+| `127.0.0.1:<p>` | `<p>` | 200 |
+| `0.0.0.0:<p>` | `<p>+1000` | **200** |
+
+A port of its own is therefore the only arrangement that works whichever way
+the review happened to bind.
+
+### A link is only shown once it answers
+
+The same silent failure means `tailscale serve status` is not evidence a URL
+loads. Every tailnet link is fetched first and is written to the hint line and
+the status file only when the request answers; a reservation that does not is
+taken down and republished on the next sync. Any HTTP status counts — a `403`
+from Plannotator's Host allowlist is a live listener just like a `200`. A
+refusal by the host's own fetch policy reads as unreachable, so the link is
+withheld rather than guessed at: the localhost link is always still there.
 
 ## Hint line
 
 While a review of this session's is live, the newest one is drawn on the hint
 line under the prompt — `review` and a link carrying the tailnet URL when the
-port is published, the loopback URL otherwise. Nothing is drawn when no review
-is live. This needs no settings entry and no per-machine script: it installs
-with the plugin.
+port is published and answers, the loopback URL otherwise. Nothing is drawn
+when no review is live. This needs no settings entry and no per-machine script:
+it installs with the plugin.
 
 It is drawn by a `ui.render` hook on `PromptHint`, beside the engine's own hint
 rather than replacing it — that tree carries the key hints and pills, and
@@ -54,11 +85,12 @@ The mod still keeps `~/.claude/plannotator-tailnet/<session id>.json` up to
 date, so a `statusLine` command of your own can draw the same links:
 
 ```json
-[{ "label": "115515 (review)", "local": "http://localhost:33919", "tailnet": "https://<host>.<tailnet>.ts.net:33919/" }]
+[{ "label": "115515 (review)", "local": "http://localhost:33919", "tailnet": "https://<host>.<tailnet>.ts.net:34919/" }]
 ```
 
-`tailnet` is present only while `tailscale serve` publishes the port; the list
-is empty once no review is live. Read it with the `session_id` stdin gives you:
+`tailnet` is present only while `tailscale serve` publishes the port **and the
+listener answers**; the list is empty once no review is live. Read it with the
+`session_id` stdin gives you:
 
 ```bash
 f="$HOME/.claude/plannotator-tailnet/${session_id}.json"
@@ -83,17 +115,21 @@ session's environment and which the registry records as `hostSession`. A review
 with no tag — started from a shell, or by a host that tags nothing — is
 nobody's here, and is left exactly as it was found.
 
-Publishing is per port. Plannotator picks a fresh port each session, so nothing
-is ever reassigned underneath a review already in progress.
+Publishing is per review. Plannotator picks a fresh port each session, so
+nothing is ever reassigned underneath a review already in progress, and the
+tailnet port moves with it.
 
 ## What it will not touch
 
 - Another session's review, and any review nothing tagged.
 - A port already serving something else: left alone, reported as skipped. Only a
   mapping this mod published is ever removed, and only while it still points
-  where the mod put it.
+  where the mod put it. That includes the tailnet port it would have used — it
+  is *derived* (`<review port> + 1000`), not chosen, so it can be one the person
+  already serves something on.
 - Ports below 1024, and 443 (which would collide with the person's own HTTPS
-  listener), are never published.
+  listener), are never published — and neither is a review whose derived tailnet
+  port would land past 65535.
 
 ## The Host allowlist
 
