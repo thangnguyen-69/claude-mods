@@ -1,6 +1,6 @@
 {
   "name": "human-review",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent and human iterate on a change in Plannotator — diff review, per-finding verdicts as one-click questions, fix, push, reopen — until the human approves",
   "author": {
     "name": "Thang Nguyen"

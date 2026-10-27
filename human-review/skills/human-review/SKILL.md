@@ -72,6 +72,13 @@ the base every time.
 
 ## 2. Open a round
 
+0. **Draw the flow first, round 1 and whenever a round changes it.** A diff shows
+   lines; the human also needs the behaviour those lines change. Write a Mermaid
+   diagram (`<repo>-flow.mmd` next to the verdicts files) of the flow the change
+   touches: job and step order, the data passed between them, the states or
+   nights a feature runs through, and mark what this change adds or alters. Open
+   it with `plannotator` `action: "annotate"` and post its links with the diff's.
+   Comments on it come back with the node's id and are triaged like any finding.
 1. Call `plannotator` with `action: "review"`, `target: <directory>` and
    `options.base: <base>`. Note the session id (`pn-...`) and the localhost URL
    it returns.

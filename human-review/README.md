@@ -5,7 +5,8 @@
 until you click **Approve**:
 
 1. Claude opens the change as a Plannotator diff review against the right base
-   (the PR's target, or the branch below a stacked one) and posts its links.
+   (the PR's target, or the branch below a stacked one), with a Mermaid diagram
+   of the flow it touches next to it, and posts the links.
 2. You annotate the diff.
 3. Claude triages every annotation, without touching code: a verdict per finding
    (Confirmed / Partly / Not a bug / Intended), evidence, whether this change or
