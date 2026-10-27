@@ -55,7 +55,8 @@ the review happened to bind.
 
 The same silent failure means `tailscale serve status` is not evidence a URL
 loads. A link is drawn in the band and written to the status file only once
-`ss -ltn` shows the listener tailscaled creates — `<ip>%tailscale0:<port>`.
+`ss -ltn` shows the listener tailscaled creates — `<ip>%tailscale0:<port>`, or
+`<ip>:<port>` with a tailnet address on WSL2, whose `ss` prints no interface.
 
 That is deliberately a local read and not a fetch of the URL: `$.http.fetch`
 to the tailnet name is refused outright in some sessions (a web-fetch policy,

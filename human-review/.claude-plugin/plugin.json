@@ -1,0 +1,8 @@
+{
+  "name": "human-review",
+  "version": "0.2.0",
+  "description": "Claude teaches you the change it made (walkthrough, architecture and flow diagrams), then you iterate on it in Plannotator — diff review, per-finding verdicts as one-click questions, fix, push, reopen — until the human approves",
+  "author": {
+    "name": "Thang Nguyen"
+  }
+}

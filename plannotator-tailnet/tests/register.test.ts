@@ -54,6 +54,8 @@ type Host = {
    * listener never appeared — the failure this mod has to survive.
    */
   setUnreachable: (ports: readonly number[]) => void
+  /** List tailnet listeners as WSL2's `ss` does: the address alone, no `%tailscale0`. */
+  setBareListeners: (bare: boolean) => void
   /** Every `ss -ltn` the mod asked for. */
   readonly probed: () => number
 }
@@ -66,6 +68,7 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
   const files = new Map<string, string>()
   const unreachable = new Set<number>()
   let probes = 0
+  let bareListeners = false
   let live: readonly unknown[] = sessions
 
   const reply = (stdout: string, exitCode = 0): { value: ProcessRunResult } => ({
@@ -108,7 +111,7 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
         .map(port => `LISTEN 0 512 0.0.0.0:${port} 0.0.0.0:*`)
       for (const port of served.keys()) {
         if (unreachable.has(port)) continue
-        rows.push(`LISTEN 0 4096 100.64.0.1%tailscale0:${port} 0.0.0.0:*`)
+        rows.push(`LISTEN 0 4096 100.64.0.1${bareListeners ? '' : '%tailscale0'}:${port} 0.0.0.0:*`)
       }
       return reply(rows.length > 0 ? `${rows.join('\n')}\n` : '')
     }
@@ -158,6 +161,9 @@ function fakeHost(on: On, sessions: readonly unknown[]): Host {
     setUnreachable: ports => {
       unreachable.clear()
       for (const port of ports) unreachable.add(port)
+    },
+    setBareListeners: bare => {
+      bareListeners = bare
     },
   }
 }
@@ -529,6 +535,21 @@ test('a listener on 0.0.0.0 is not mistaken for the tailnet one', async ($, on) 
 
   expect(answer.text).toContain('reserved but not answering')
   expect(host.files.get(STATUS_FILE) ?? '').not.toContain('tailnet')
+})
+
+test('a tailnet listener listed without its interface still counts (WSL2)', async ($, on) => {
+  // WSL2's `ss` prints the tailnet address alone, `100.x.y.z:<port>`, with no
+  // `%tailscale0`. The link answers, so it must be shown; the address being a
+  // tailnet one is what tells it apart from the review's own 0.0.0.0 bind.
+  const host = setUp(on, [planReview(PORT, SESSION_ID)])
+  host.setBareListeners(true)
+
+  await $.session.start({ ...SESSION })
+  await $.command.run({ ...COMMAND })
+
+  expect(JSON.parse(host.files.get(STATUS_FILE) ?? 'null')).toEqual([
+    { label: 'demo (plan)', local: `http://localhost:${PORT}`, tailnet: `https://${HOST}:${SERVED}/` },
+  ])
 })
 
 test('a review whose own port is the derived one does not fake its own listener', async ($, on) => {

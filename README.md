@@ -18,6 +18,7 @@ mod in every session started from then on.
 | [`plannotator-tailnet`](./plannotator-tailnet) | Publishes *this* Claude session's live [Plannotator](https://github.com/backnotprop/plannotator) reviews on your tailnet, so a plan or a diff can be reviewed from a phone — and puts the review's URL above the prompt as a hyperlink while it lives. |
 | [`pr-links`](./pr-links) | Pins the pull/merge request a command just printed — `gh pr create`, `tea pr create`, `glab mr create`, an Azure DevOps `pullrequest` URL — as a clickable link on the hint line, so the URL is there without scrolling back for it. Any forge, by URL shape; no token, no configuration. |
 | [`implement-beads`](./implement-beads) | Works through a [beads](https://github.com/gastownhall/beads) epic unattended: per bead, an implementer teammate does the work and a separate judge teammate verifies every acceptance criterion before the bead can pass. Teammates run as named Claude sessions in herdr panes. |
+| [`human-review`](./human-review) | `/human-review`: Claude teaches you the change it made (a walkthrough with architecture and flow diagrams), then you iterate on it in Plannotator until you approve. Every annotation gets a verdict and goes back to you as a one-click question with its scope spelled out; Claude applies only what you chose, verifies, pushes and reopens the diff. Works from a phone with `plannotator-tailnet`. |
 
 Each mod has its own README with requirements and design notes.
 

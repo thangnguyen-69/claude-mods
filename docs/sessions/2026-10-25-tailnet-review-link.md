@@ -127,7 +127,7 @@ nowhere.
 0.5.2 probes `ss -ltn` instead, keyed on the interface:
 
 ```
-LISTEN 0 4096 100.76.234.61%tailscale0:21011 0.0.0.0:*    # serves
+LISTEN 0 4096 100.64.0.1%tailscale0:21011 0.0.0.0:*    # serves
 LISTEN 0 512               0.0.0.0:20011 0.0.0.0:*        # the review's own bind
 ```
 
