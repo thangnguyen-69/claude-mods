@@ -302,6 +302,9 @@ async function unpublish($: Engine, status: Servings, reviewPort: number): Promi
  */
 const reachable = new Set<number>()
 
+/** A tailnet address as `ss` prints it: IPv4 in 100.64.0.0/10, or IPv6 in fd7a:115c:a1e0::/48 (bracketed). */
+const TAILNET_ADDRESS = String.raw`(?:100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}|\[fd7a:115c:a1e0:[0-9a-f:]*\])`
+
 /**
  * Whether `tailscale serve` has really taken `port` on the tailnet.
  *
@@ -309,7 +312,8 @@ const reachable = new Set<number>()
  * prints, so a link built from it looks published while every request to it
  * dies with `wrong version number`. What does settle it is the listener the
  * tailscaled side creates — `ss` shows
- * `<tailscale-ip>%tailscale0:<port>` for a port that serves, and nothing for
+ * `<tailscale-ip>%tailscale0:<port>` (or `<tailscale-ip>:<port>` on WSL2,
+ * which prints no interface) for a port that serves, and nothing for
  * one whose reservation silently failed. That is a local read, so it needs no
  * network and cannot be refused by the host's fetch policy:
  * `$.http.fetch` to the tailnet URL is refused outright in some sessions,
@@ -325,10 +329,12 @@ async function serves($: Engine, port: number): Promise<boolean> {
   const listing = await run($, ['ss', '-ltn'], 10000)
   if (!listing.isOk) return false
 
-  // `<addr>%tailscale0:<port>` — the interface anchor matters: the review's
+  // `<addr>%tailscale0:<port>`, or the tailnet address alone where `ss` prints
+  // no interface (WSL2: `100.x.y.z:<port>`). The anchor matters: the review's
   // own `0.0.0.0:<port>` listener is a different, useless line that matches on
-  // a bare port search.
-  const listener = new RegExp(`\\S*%tailscale0:${port}\\s`)
+  // a bare port search, so a line without the interface counts only when its
+  // address is a tailnet one (100.64.0.0/10 or fd7a:115c:a1e0::/48).
+  const listener = new RegExp(`(?:\\S*%tailscale0|(?<![\\w.:])${TAILNET_ADDRESS}):${port}\\s`)
   if (!listener.test(listing.stdout)) return false
 
   reachable.add(port)
