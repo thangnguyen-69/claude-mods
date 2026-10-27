@@ -21,7 +21,7 @@
     {
       "name": "human-review",
       "source": "./human-review",
-      "description": "Review loop with the human in Plannotator: verdict per annotation, one-click decisions, fix, push, reopen, until Approve"
+      "description": "Claude teaches you its change (walkthrough + diagrams), then reviews it with you in Plannotator until Approve"
     }
   ]
 }

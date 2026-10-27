@@ -1,16 +1,20 @@
 ---
 name: human-review
-description: "Run a review loop with the human in Plannotator until they click Approve: open the change as a diff review, post its localhost and tailnet links, triage every annotation with a verdict (no code changed yet), put the verdicts back to them as one-click questions, apply exactly what they chose, verify, push, and reopen the review on the same base — round after round. Use whenever the user says /human-review, 'review with me via plannotator', 'iterate until I approve', 'open the changes again', 'let me review the PR on my phone', or hands over a PR/branch/worktree to review together, even if they don't name the skill."
+description: "Teach the human the change you made, then review it with them in Plannotator until they click Approve: prepare a walkthrough (the problem, the architecture the change sits in, Mermaid diagrams of the flows and data it touches, a reading order for the diff), open it with the diff review, post its localhost and tailnet links, triage every annotation with a verdict (no code changed yet), put the verdicts back to them as one-click questions, apply exactly what they chose, verify, push, and reopen the review on the same base — round after round. Use whenever the user says /human-review, 'review with me via plannotator', 'iterate until I approve', 'open the changes again', 'let me review the PR on my phone', or hands over a PR/branch/worktree to review together, even if they don't name the skill."
 ---
 
 # human-review
 
-A review loop between you and the human, with Plannotator as the shared surface.
-The human reads and decides; you triage, change, verify and reopen. The loop ends
+You act as the human's teacher for a change you made, and Plannotator is the
+classroom. The goal is not only an approved diff: it is a human who understands
+what changed, where it sits in the system, and why it behaves the way it does,
+well enough to own it after you're gone. So you prepare the lesson (a walkthrough
+with diagrams) before the first review, answer their questions in it as the
+rounds go, and only then does the review loop decide the code. The loop ends
 only when they click **Approve** in a diff review.
 
 ```
-open diff review ──> links ──> [human annotates] ──> verdicts.md (one question per finding)
+walkthrough + diagrams + diff review ──> links ──> [human annotates] ──> verdicts.md (one question per finding)
       ^                                                        │
       │                                                  [human answers]
       └── close stale review <── push <── verify <── apply only the chosen fixes
@@ -72,13 +76,35 @@ the base every time.
 
 ## 2. Open a round
 
-0. **Draw the flow first, round 1 and whenever a round changes it.** A diff shows
-   lines; the human also needs the behaviour those lines change. Write a Mermaid
-   diagram (`<repo>-flow.mmd` next to the verdicts files) of the flow the change
-   touches: job and step order, the data passed between them, the states or
-   nights a feature runs through, and mark what this change adds or alters. Open
-   it with `plannotator` `action: "annotate"` and post its links with the diff's.
-   Comments on it come back with the node's id and are triaged like any finding.
+0. **Prepare the lesson (round 1, and again whenever a round changes what it
+   teaches).** A diff shows lines; the human needs the system those lines change.
+   Write, next to the verdicts files:
+   - `<repo>-walkthrough.md`, for a reader who has not seen the code:
+     - **The problem**: what was wrong or missing, in a few sentences, with the
+       evidence (ticket, failing run, measurement) by full URL.
+     - **Where it lives**: the components the change touches and how they connect
+       (repos, pipelines and jobs, scripts, artifacts, external services), and
+       which of them this change edits.
+     - **How it behaves now**: walk one or two concrete cases end to end (a normal
+       run, the edge case the change exists for), with real values.
+     - **Data and formats** the change adds or alters: each field, who writes it,
+       who reads it, a short real example.
+     - **Decisions and trade-offs**: what was chosen, what was rejected, and what
+       is accepted as a known limit.
+     - **Reading order for the diff**: the files and line ranges to read, in the
+       order that makes sense, one line each on what to look for.
+   - `<repo>-architecture.mmd`: the components and their connections, with what
+     this change touches highlighted.
+   - `<repo>-flow.mmd` (one per flow worth drawing): the order of jobs and steps,
+     the data passed between them, the states or nights a feature runs through.
+   Open the walkthrough and the diagrams as one `plannotator` `action: "annotate"`
+   review (`target` as a list: walkthrough first), then the diff review, and post
+   both reviews' links. Comments on a diagram come back with the node's id.
+
+   Questions the human asks along the way ("what is this field for?", "why
+   three lists?") are lessons too: answer them, then fold the answer into the
+   walkthrough (and the project's spec, if it has one) so the next reader gets
+   it without asking.
 1. Call `plannotator` with `action: "review"`, `target: <directory>` and
    `options.base: <base>`. Note the session id (`pn-...`) and the localhost URL
    it returns.

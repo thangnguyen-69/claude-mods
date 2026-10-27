@@ -1,12 +1,18 @@
 # human-review
 
-`/human-review` runs a review loop between you and Claude, with
-[Plannotator](https://github.com/backnotprop/plannotator) as the shared surface,
-until you click **Approve**:
+`/human-review` makes Claude your teacher for a change it made: it explains the
+change, where it sits in the system and how it behaves, with diagrams, and then
+reviews it with you in [Plannotator](https://github.com/backnotprop/plannotator)
+until you click **Approve**. The aim is that you understand and can own the
+change, not just that the diff gets a sign-off.
 
-1. Claude opens the change as a Plannotator diff review against the right base
-   (the PR's target, or the branch below a stacked one), with a Mermaid diagram
-   of the flow it touches next to it, and posts the links.
+1. Claude prepares the lesson: a walkthrough (the problem, where the change
+   lives, how it behaves on real cases, the data formats it adds, the trade-offs,
+   a reading order for the diff) plus Mermaid diagrams of the architecture and
+   the flows it touches. It opens them in Plannotator together with the diff
+   review against the right base (the PR's target, or the branch below a stacked
+   one), and posts the links. Questions you ask later are folded back into the
+   walkthrough.
 2. You annotate the diff.
 3. Claude triages every annotation, without touching code: a verdict per finding
    (Confirmed / Partly / Not a bug / Intended), evidence, whether this change or
