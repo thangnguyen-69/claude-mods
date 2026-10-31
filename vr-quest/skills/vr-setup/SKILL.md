@@ -335,8 +335,10 @@ Then wait for a `Started screen cast session` line and, after the user connects,
 | slot 1 virtual | **2560x1080** | Chrome |
 
 `LocalMaxBitrate` raised 16000 → **40000** (USB link negotiated 480 Mb/s, so there is room);
-power profile `balanced` (performance only added heat — the GPU idles near 600 MHz under
-Immersed). Arrange left/right **in VR** (Immersed's screen swap / drag), never by moving `eDP-1`
+keep the power profile on **performance** while in VR (`tuned-adm profile throughput-performance`):
+measured on the same session, `balanced` dropped capture to 35–45 fps on all three screens and
+performance restored 48–57 fps — capture (CPU + PipeWire threads), not the GPU, is what the
+profile limits. Arrange left/right **in VR** (Immersed's screen swap / drag), never by moving `eDP-1`
 in GNOME. A copy of the working config is worth keeping (`cp ~/.ImmersedConf <somewhere>`).
 
 **Free-account screen cap (observed, not documented):** with 3 virtual slots enabled, a free
