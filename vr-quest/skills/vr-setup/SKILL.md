@@ -341,6 +341,13 @@ performance restored 48–57 fps — capture (CPU + PipeWire threads), not the G
 profile limits. Arrange left/right **in VR** (Immersed's screen swap / drag), never by moving `eDP-1`
 in GNOME. A copy of the working config is worth keeping (`cp ~/.ImmersedConf <somewhere>`).
 
+**Crisper text:** the limit is the headset (~25 px/degree on Quest 3), not the stream — a 1440-px-wide
+virtual screen already packs more pixels per degree than the headset shows, so more resolution or
+bitrate won't help. Bigger glyphs do: raise app font sizes (Alacritty `[font] size = 15`, Chrome
+zoom 125–150%), bring screens closer in VR, or scale the virtual monitors in Settings → Displays
+(by hand, not scripted, while Immersed streams). Keep `font-antialiasing` on `grayscale` (subpixel
+colour fringes smear after 4:2:0 video compression); `font-hinting 'full'` sharpens stems slightly.
+
 **Free-account screen cap (observed, not documented):** with 3 virtual slots enabled, a free
 account got only 3 screens in total (physical + 2 virtual); the third enabled slot was silently
 skipped (`Screen count is 3`, no error logged). Fit the layout into 2 virtual slots, e.g. slot 0
