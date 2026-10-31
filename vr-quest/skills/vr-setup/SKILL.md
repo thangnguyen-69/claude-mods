@@ -206,6 +206,13 @@ per stream and does not rebuild it when Mutter's layout changes.
 
 **Consequences:**
 
+Re-confirmed 2026-10-31 on Fedora 42 / GNOME 48.8 / Intel UHD (laptop panel `eDP-1`): after
+`vr-layout apply` put portrait at x=0, wide at x=1440 and `eDP-1` (primary) at x=4000, the next
+`Screen Info` block showed the **virtual** screens' capture offsets following the move
+(`(0, 0) 1440x2560`, `(1440, 0) 2560x1080`) but the physical screen still at `(0, 0)` — and the
+laptop screen stopped updating in VR. So only the physical/primary capture is stale; virtual
+screens can be rearranged freely as long as the physical one stays at (0,0).
+
 - Safe: `DP-1` stays at x=0, portrait at x=1920, third screen at x=3360.
 - Unsafe: portrait at x=0 with `DP-1` moved to x=1440.
 - Negative x is impossible (see trap 3), so "portrait left of the primary" cannot be achieved
@@ -215,7 +222,9 @@ per stream and does not rebuild it when Mutter's layout changes.
 rebuilds its ScreenCast streams. If the new streams pick up the new offsets, the left position
 may become usable.
 
-`vr-layout` snapshots live in `~/.config/vr-layouts/`. `restore` only accepts timestamped
+The target layout comes from `~/.config/vr-layouts/desired.json` (a list of
+`{"connector","x","y","primary"}`) when present, else the built-in `DP-1` example; connector names
+differ per host (`vr-layout show` lists them). `vr-layout` snapshots live in `~/.config/vr-layouts/`. `restore` only accepts timestamped
 snapshots (`layout-YYYYmmdd-HHMMSS.json`); named layouts such as `layout-desired-*.json` are
 `apply only` and deliberately unreachable by `restore`, so the emergency command can never
 re-apply the layout you are escaping. Keep that restriction if you edit the script.
@@ -290,6 +299,17 @@ Then wait for a `Started screen cast session` line and, after the user connects,
 `Screen Info` block.
 
 ## 8. Sizing and performance
+
+**Free-account screen cap (observed, not documented):** with 3 virtual slots enabled, a free
+account got only 3 screens in total (physical + 2 virtual); the third enabled slot was silently
+skipped (`Screen count is 3`, no error logged). Fit the layout into 2 virtual slots, e.g. slot 0
+portrait for a terminal, slot 1 wide for the browser, small apps on the physical screen.
+
+**Immersed vs WiVRn on a weak iGPU (measured, Intel UHD i5-1335U):** WiVRn+WayVR kept the render
+engine (RCS) at 83–88% at ~1.2 GHz and panels wobbled; Immersed with 3 screens used RCS 31–42% at
+~600 MHz, VCS 13–17%, 57–60 fps encode, and the user reported "very still, very sharp". Immersed
+renders the room and panels on the headset, so a slow PC only slows screen *content*, never head
+tracking. Prefer Immersed for text work on an iGPU.
 
 Lag is **capture-bound**, not link-bound or encode-bound. Measured on a 780M:
 
