@@ -90,6 +90,15 @@ the Xorg session will not work.
   binary also references a device name `uinput-immersed` and the legacy `/dev/input/uinput`,
   which does not exist on modern hosts. Keyboard injection may fall back to X11 `XTest` through
   XWayland. (Fallback is a theory, not verified.)
+- **VR clicks/taps never reach the desktop on GNOME Wayland** (verified 2026-11-01, Linux agent
+  build of Dec 2025). `Failed to open uinput.` is not a permissions problem: an LD_PRELOAD tracer
+  showed the agent never calls `open()` on `/dev/uinput` at all, even with `/dev/uinput` at
+  `root:input 0660` and the user in `input`. Disassembly of `InputEventWayland::reloadScreenSize`
+  shows the uinput fd field is zeroed in the constructor and only checked (`fd <= 0` → log the
+  error), never opened. Treat hand/controller clicking into the desktop as unsupported in this
+  build; use the physical mouse/touchpad/keyboard. (WayVR does support pinch-click.)
+  To trace the agent: AppImageLauncher's `binfmt-bypass` strips `LD_PRELOAD`, so extract the
+  AppImage (`--appimage-extract`) and run `squashfs-root/AppRun` with the preload.
 - `Failed VIDIOC_G_FMT -1` — `CameraDevice` points at a real webcam, not a v4l2loopback device.
 - `NVENC ... Unsupported` / no HEVC — correct on an AMD iGPU. VAAPI H.264 is the encoder.
 - `Cannot find key for int curator-request` / `account_type` — harmless.
