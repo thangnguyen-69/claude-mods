@@ -1,6 +1,6 @@
 ---
 name: vr-setup
-description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, or the free open-source WiVRn + WayVR stack. Use when the user says /vr-setup, asks to install or configure Immersed, wants virtual displays, extra monitors, a portrait or ultra-wide/high VR screen, needs the monitors arranged or positioned, reports VR screens stuck/frozen/laggy, that a virtual display won't change resolution, that Immersed is not updating or needs a restart, that GNOME Displays shows monitors overlapping, or that a VR session died. Also use for WiVRn or WayVR: installing them, a Quest that will not connect over USB (adb unauthorized), WayVR showing black or nothing, hand tracking or the wrist watch not working, opening apps or a terminal inside VR, typing into VR apps with the physical keyboard (Super+Z), recentering, or avoiding a VR subscription. Also use when VR panels lose their positions or the user wants the screen layout remembered. Also covers the scripts vr-layout, vr-diag, vr-diag-watch, vr-start, vr-reconnect, vr-ready, vr-workspace, vr-term, spotify-vr, chrome-vr, vr-fix and vr-hand-bindings."
+description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, or the free open-source WiVRn + WayVR stack. Use when the user says /vr-setup, asks to install or configure Immersed, wants virtual displays, extra monitors, a portrait or ultra-wide/high VR screen, needs the monitors arranged or positioned, reports VR screens stuck/frozen/laggy, that a virtual display won't change resolution, that Immersed is not updating or needs a restart, that GNOME Displays shows monitors overlapping, or that a VR session died. Also use for WiVRn or WayVR: installing them, a Quest that will not connect over USB (adb unauthorized), WayVR showing black or nothing, hand tracking or the wrist watch not working, opening apps or a terminal inside VR, typing into VR apps with the physical keyboard (Super+Z), recentering, or avoiding a VR subscription. Also use when VR panels lose their positions or the user wants the screen layout remembered. Also use when WiVRn/WayVR wobbles or judders on a weak iGPU (switch to Immersed). Also covers the scripts vr-immersed, vr-layout, vr-diag, vr-diag-watch, vr-start, vr-reconnect, vr-ready, vr-workspace, vr-term, spotify-vr, chrome-vr, vr-fix and vr-hand-bindings."
 ---
 
 # VR setup — Meta Quest desktop on Linux (Immersed, or WiVRn + WayVR)
@@ -12,7 +12,13 @@ description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, 
 | Cost | free tier; paid ~$5–6/mo for more screens | free, open source, no account |
 | Model | real extra **virtual monitors** (GNOME Wayland) | app **panels** in VR + optional monitor mirror |
 | Hands | polished (poke, grab) | ray + pinch after `vr-hand-bindings` |
-| Established on | Ubuntu 24.04, AMD 780M | Fedora 42, Intel UHD (T14 Gen 4) |
+| Established on | Ubuntu 24.04 AMD 780M; Fedora 42 Intel UHD | Fedora 42, Intel UHD (T14 Gen 4) |
+| Who renders 3D | **the headset** (PC only captures + encodes flat screens) | **the PC** (both eyes, every frame) |
+| Weak iGPU | head motion stays smooth; slow PC only slows screen content | panels wobble/judder when the PC misses frames |
+
+**For text work on an integrated GPU, recommend Immersed.** Measured on an i5-1335U (Intel UHD):
+WiVRn+WayVR held the render engine at 83–88% at ~1.2 GHz and panels wobbled; Immersed with three
+screens used 31–42% at ~600 MHz and was "very still, very sharp" (see §8).
 
 If the user is on WiVRn/WayVR, mentions those names, or wants no subscription, use
 `wivrn-wayvr.md`; the Immersed sections below don't apply to it. Both stacks share a Quest + adb.
@@ -29,7 +35,7 @@ Look before overwriting: if a same-named script already exists in `~/.local/bin`
 ```bash
 SKILL_DIR="<this skill's base directory>"     # the folder containing this SKILL.md
 # Immersed
-for f in vr-layout vr-diag vr-diag-watch; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
+for f in vr-immersed vr-layout vr-diag vr-diag-watch; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
 # WiVRn + WayVR
 for f in wayvr vr-start vr-reconnect vr-ready vr-workspace vr-term alacritty-vr spotify-vr chrome-vr vr-fix vr-hand-bindings; do
   install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f
@@ -62,6 +68,11 @@ Terminal=false
 Categories=Network;
 StartupWMClass=Immersed
 ```
+
+Day-to-day start: `vr-immersed` starts the agent if it isn't running, closes WiVRn on the
+headset, and opens Immersed there over adb; the user then presses **Connect**. It finds the newest
+`~/Applications/Immersed*.AppImage` — AppImageLauncher may have moved/renamed the file there
+(e.g. `Immersed-x86_64_<hash>.AppImage`).
 
 Launch detached so it survives the shell:
 
@@ -314,6 +325,19 @@ Then wait for a `Started screen cast session` line and, after the user connects,
 `Screen Info` block.
 
 ## 8. Sizing and performance
+
+**Known-good setup on a free account + Intel UHD (Fedora 42, 2026-10-31):**
+
+| Screen | Resolution | Use |
+|---|---|---|
+| laptop panel `eDP-1` (primary, x=0) | 1920x1200 | Spotify / small apps |
+| slot 0 virtual | 2560x1440 `IsRotated:true` → **1440x2560** | tall terminal |
+| slot 1 virtual | **2560x1080** | Chrome |
+
+`LocalMaxBitrate` raised 16000 → **40000** (USB link negotiated 480 Mb/s, so there is room);
+power profile `balanced` (performance only added heat — the GPU idles near 600 MHz under
+Immersed). Arrange left/right **in VR** (Immersed's screen swap / drag), never by moving `eDP-1`
+in GNOME. A copy of the working config is worth keeping (`cp ~/.ImmersedConf <somewhere>`).
 
 **Free-account screen cap (observed, not documented):** with 3 virtual slots enabled, a free
 account got only 3 screens in total (physical + 2 virtual); the third enabled slot was silently

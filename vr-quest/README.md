@@ -29,6 +29,7 @@ vr-quest/
     SKILL.md            # stack picker + the Immersed procedure and traps
     wivrn-wayvr.md      # the WiVRn + WayVR procedure and traps
     scripts/
+      vr-immersed       # Immersed: start the agent + open Immersed on the Quest over USB
       vr-layout         # Immersed: save / apply / restore the Mutter monitor layout
       vr-diag           # Immersed: one-shot diagnostic snapshot (+ --compare)
       vr-diag-watch     # Immersed: background sampler; `hang` = immediate capture
@@ -77,7 +78,8 @@ Immersed:
 
 1. **Never move the primary display off x=0.** Doing so corrupts Immersed's capture offsets and
    the primary screen's VR stream freezes while other screens keep working. Negative positions are
-   rejected by Mutter, so "portrait left of the primary" is not safely achievable.
+   rejected by Mutter, so put screens left of the laptop **in VR** (swap/drag) instead. Never script
+   monitor off/on toggles while Immersed streams: it segfaulted gnome-shell once.
 2. **Bitrate is not a stall signal.** Tens of kbps is normal for an idle desktop. Compare
    `TotalFrame`/`TotalBytes` between two `Screen Info` blocks, and check the block timestamp is
    newer than the event.

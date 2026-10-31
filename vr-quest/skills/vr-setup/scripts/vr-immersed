@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Start the Immersed agent (if needed) and open Immersed on the Quest over USB.
+set -u
+app=$(ls -t "$HOME"/Applications/Immersed*.AppImage "$HOME"/Applications/Immersed/*.AppImage 2>/dev/null | head -1)
+[ -n "$app" ] || { echo "Immersed AppImage not found in ~/Applications" >&2; exit 1; }
+if pgrep -x Immersed >/dev/null; then
+  echo "Immersed agent already running."
+else
+  setsid nohup "$app" > "$HOME/.local/state/immersed-launch.log" 2>&1 < /dev/null &
+  echo "Started Immersed agent: $app"
+fi
+if adb get-state >/dev/null 2>&1; then
+  adb shell am force-stop org.meumeu.wivrn >/dev/null 2>&1 || true
+  adb shell monkey -p Immersed.quest -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+    && echo "Opened Immersed on the headset. Press Connect there."
+else
+  echo "Headset not on USB/adb; open Immersed on the headset yourself and press Connect."
+fi
