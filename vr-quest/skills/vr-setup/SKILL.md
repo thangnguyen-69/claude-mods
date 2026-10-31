@@ -218,6 +218,16 @@ so the leftmost monitor must sit at x=0 — "left of the laptop" always means mo
 Workable answer: keep the physical screen at (0,0) and arrange screens by dragging them in VR
 (Immersed stores VR positions relative to the physical screen and accepts negative ones there).
 
+**Turning the physical monitor off, then on at the new position, rebuilds its capture — but it can
+crash GNOME.** Observed 2026-10-31 (GNOME 48.8): with the laptop panel switched off and back on
+(at 18:23, via GNOME Settings or Immersed — unclear which), Immersed created a fresh stream for it
+at x=4000 and it worked; gnome-shell then logged ~400/min `Error blitting to screencast
+framebuffer: cogl_framebuffer_blit premult mismatch`. A scripted repeat (restore, then off → on via
+`ApplyMonitorsConfig` within seconds) **segfaulted gnome-shell** (`meta_monitor_mode_foreach_crtc`
+← `sync_cursor_state`), logging the user out and killing every app. Do **not** script monitor
+on/off toggles while Immersed is streaming. Safe options: keep the physical screen at (0,0) and
+arrange in VR, or swap screens in Immersed's VR UI.
+
 - Safe: `DP-1` stays at x=0, portrait at x=1920, third screen at x=3360.
 - Unsafe: portrait at x=0 with `DP-1` moved to x=1440.
 - Negative x is impossible (see trap 3), so "portrait left of the primary" cannot be achieved
