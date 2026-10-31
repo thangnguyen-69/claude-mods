@@ -70,7 +70,14 @@ StartupWMClass=Immersed
 ```
 
 Day-to-day start: `vr-immersed` starts the agent if it isn't running, closes WiVRn on the
-headset, and opens Immersed there over adb; the user then presses **Connect**. It finds the newest
+headset, and opens Immersed there over adb; the user then presses **Connect**.
+
+**Per-place profiles:** `vr-immersed --save home` stores the current virtual-display slots
+(`VDData`) and `LocalMaxBitrate` in `~/.config/vr-layouts/immersed/profiles/home.profile`;
+`vr-immersed home` stops the agent (it rewrites its config on exit), patches only those two
+values into `~/.ImmersedConf` (backup first), and starts it. `--list` shows profiles. VR screen
+positions live on the headset and window-to-monitor placement can't be scripted on GNOME Wayland,
+so neither is part of a profile. It finds the newest
 `~/Applications/Immersed*.AppImage` — AppImageLauncher may have moved/renamed the file there
 (e.g. `Immersed-x86_64_<hash>.AppImage`).
 
