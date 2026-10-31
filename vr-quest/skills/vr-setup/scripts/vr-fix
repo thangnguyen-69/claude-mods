@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # WayVR often hangs after the headset is taken off (black view, wayvrctl gets no reply).
-# Kill it, start a fresh one, then open the VR terminal once the headset is worn again.
-# Apps that ran inside WayVR die with it.
+# Kill it, start a fresh one, then reopen the whole workspace once the headset is worn.
+# Apps that ran inside WayVR die with it; vr-workspace reopens them at their saved spots.
 WAYVR_BIN="${WAYVR_BIN:-$(ls -d "$HOME"/Applications/wayvr-v* 2>/dev/null | grep -vi appimage | sort -V | tail -1)}"
 [ -n "$WAYVR_BIN" ] || { echo "No WayVR binary found; set WAYVR_BIN" >&2; exit 1; }
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/wayvr-manual.log"
 pids=$(pgrep -f "^$WAYVR_BIN( |\$)"); [ -n "$pids" ] && kill -9 $pids 2>/dev/null; sleep 1
 setsid nohup wayvr --replace --show --headless >"$LOG" 2>&1 </dev/null &
-echo "WayVR restarted. Put the headset on; the terminal opens when it's active."
-for _ in $(seq 1 150); do
-  sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep 'entered state' | tail -1 | grep -q FOCUSED && break
-  sleep 2
-done
-sleep 1; timeout 20 vr-term >/dev/null 2>&1 && echo "Terminal opened."
+echo "WayVR restarted. Put the headset on; your workspace opens when it's active."
+sleep 3
+exec vr-workspace

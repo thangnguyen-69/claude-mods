@@ -35,9 +35,13 @@ vr-quest/
       wayvr             # WayVR wrapper: libopenvr path + newest standalone binary
       vr-start          # cold start: WiVRn server, fresh WayVR, USB or Wi-Fi
       vr-reconnect      # rejoin over USB, keeping apps open in VR
+      vr-ready          # wait until WayVR answers (running + headset worn)
+      vr-workspace      # open your app list once each; they return to saved spots
       vr-term           # open a tall large-font terminal inside VR
-      alacritty-vr      # Alacritty with a VR-sized font (used by vr-term)
-      vr-fix            # WayVR hung/black: restart it, reopen the terminal
+      alacritty-vr      # Alacritty with a VR-sized font
+      spotify-vr        # Spotify forced onto Wayland so it opens in VR
+      chrome-vr         # Chrome on a separate VR profile so it opens in VR
+      vr-fix            # WayVR hung/black: restart it, reopen the workspace
       vr-hand-bindings  # Quest hand tracking that acts like controllers
 ```
 
@@ -64,6 +68,8 @@ WiVRn + WayVR:
 
 - **WayVR hangs after the headset comes off**, so you see black when you put it back on. `vr-fix`
   recovers. WiVRn must launch WayVR with `--show`, or every panel starts hidden.
+- **Layout is saved only on a clean exit or when leaving Edit mode.** Arrange panels in Edit
+  mode (watch), leave it, and `vr-workspace` brings them back to those spots.
 - **Super+Z grabs the keyboard but clears focus**: pinch-click a VR window after it, or your
   typing goes to the desktop.
 

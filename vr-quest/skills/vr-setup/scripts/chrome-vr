@@ -1,0 +1,7 @@
+#!/bin/sh
+# Google Chrome inside WayVR.
+# Separate profile: Chrome is single-instance per profile, so while the desktop Chrome runs a
+# plain launch would open its window on the desktop instead of in VR. Sign in once here.
+# (Chrome logs "--ozone-platform=wayland is not compatible with Vulkan"; it still runs.)
+CHROME="${CHROME:-$(command -v google-chrome-stable || command -v google-chrome || command -v chromium-browser || command -v chromium)}"
+exec "$CHROME" --user-data-dir="${XDG_CONFIG_HOME:-$HOME/.config}/google-chrome-vr" --ozone-platform=wayland "$@"

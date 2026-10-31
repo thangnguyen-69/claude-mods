@@ -64,10 +64,16 @@ Install all of them from this skill's `scripts/` (see SKILL.md's install block).
 | `wayvr` | wrapper: libopenvr path + newest binary |
 | `vr-start` | cold start: server, fresh WayVR, USB (adb) or Wi‑Fi |
 | `vr-reconnect` | reopen WiVRn on the headset over USB; keeps VR apps |
+| `vr-ready [secs]` | wait until WayVR answers IPC (= running and headset worn) |
+| `vr-workspace` | open each app in `~/.config/vr-workspace` once; they return to saved spots |
 | `vr-term` | open a tall large-font terminal *inside* VR |
-| `alacritty-vr` | Alacritty with a bigger font (used by `vr-term`) |
-| `vr-fix` | WayVR hung / black: kill, restart, reopen the terminal when the headset is on |
+| `alacritty-vr` | Alacritty with a bigger font (used by `vr-term`, `vr-workspace`) |
+| `spotify-vr` | Spotify (Flathub) forced onto Wayland so it opens in VR |
+| `chrome-vr` | Chrome with a separate VR profile, so it opens in VR, not the desktop |
+| `vr-fix` | WayVR hung / black: kill, restart, reopen the workspace when the headset is on |
 | `vr-hand-bindings` | write hand-tracking bindings that act like controllers |
+
+`vr-term`, `vr-ready` and `vr-workspace` call `wayvrctl` from `PATH`.
 
 ## 2. Make WiVRn start WayVR on connect
 
@@ -134,9 +140,27 @@ There is no "Connect via USB" button in the headset; that button is in the PC-si
   their window on the desktop instead of in VR.
 - Clipboard does **not** sync with GNOME: WayVR needs `ext_data_control_manager_v1`, which Mutter
   lacks.
+- Window size is capped at **2560×1440** (`WAYVR_SCREEN_RES` in `backend/wayvr/mod.rs`, a
+  constant): a 1080×1920 request opens as 1080×1440. The tallest portrait is 1440 high.
 - `wayvrctl show-hide` twice = hide then show the set, which re-places it in front of you. Quest
   recenter: hold the Meta button, or palm-up pinch-hold on the Meta icon.
 - Apps can't be placed at exact positions from the CLI; place them by grabbing.
+
+### Remembering the layout
+
+WayVR saves panel positions (`saved_transform` per overlay in `zz-saved-state.json5`) only
+**on a clean exit** or **when leaving Edit mode after a change** (`windowing/manager.rs`,
+`persist_layout`). A `kill -9` of a hung WayVR saves nothing, which is why positions seemed to be
+"forgotten". So: watch → **Edit mode** → arrange → **Edit mode** off = saved immediately.
+
+Positions are keyed by the overlay **name**, which for apps is the window title at creation
+(seen: `Alacritty`, `Spotify Premium`, `New Tab - Google Chrome`). A second copy of the same app is
+deduplicated under another name and opens at the default spot, so `vr-workspace` skips apps
+already running. Untested: an app whose first title differs between launches (Chrome restoring a
+session) may not get its spot back.
+
+WayVR restores *where* apps go, not *that* they open. `vr-workspace` opens them; `vr-start` and
+`vr-fix` run it in the background, and it waits for `vr-ready`.
 
 ### Typing into VR apps with the physical keyboard
 
@@ -158,7 +182,16 @@ not text.
   session, WayVR stops answering IPC and the headset shows black when worn again. `vr-fix`
   recovers. VR apps die with it.
 - **`wayvrctl` gets no reply while the headset is off** (WayVR not `FOCUSED`), so launches
-  silently fail. Wait for `entered state FOCUSED` in `~/.local/state/wayvr-manual.log` first.
+  silently fail. Wait with `vr-ready`, which polls IPC. **Do not wait on log lines**: when WiVRn
+  launches WayVR, WayVR writes into the WiVRn server log, so `~/.local/state/wayvr-manual.log`
+  can hold a stale `FOCUSED` from a dead instance.
+- **Never launch WayVR yourself while WiVRn is also about to.** WiVRn starts it with `--replace`
+  on connect; a second launch replaces the first and kills apps already open in it. `vr-start`
+  therefore has no "start WayVR if WiVRn didn't" fallback.
+- After many disconnects the WiVRn server can stop accepting the headset
+  (`Exception while connecting headset: Socket shutdown`, WiVRn open on the headset but nothing
+  happens). Cold start: kill WayVR, `flatpak kill io.github.wivrn.wivrn`,
+  `adb shell am force-stop <wivrn package>`, then `vr-start`.
 - **`pgrep -f PATTERN` inside `bash -c` matches its own command line.** That skipped a launch
   and killed a check script (exit 144). The scripts use `^`-anchored patterns on the binary path.
 - Expected log noise: `Could not apply bindings for valve/frame_controller_valve` /
@@ -167,10 +200,17 @@ not text.
 
 ## 7. Quality and performance (measured on Intel UHD)
 
-- Stream was **1280×1344 per eye, H.264 VAAPI, 24.6 Mbit/s**. Resolution scale and bitrate are set
-  in the **headset's WiVRn app** (WiVRn docs: headset holds most configuration). Raise them step by
-  step for sharper text; the iGPU encoder is the limit. HEVC VAAPI is available on this GPU;
-  `config.json` currently pins `h264` (reason not recorded; leave it unless testing).
+- Default stream was **1280×1344 per eye, H.264 VAAPI, 24.6 Mbit/s**. In the **headset's WiVRn
+  app** settings the user turned **foveated encoding off** (and raised quality there), giving
+  **1792×1856 per eye at 35.5 Mbit/s**, ~87% of the Quest 3's 2064×2208 per axis. Foveation is
+  fixed-center on a Quest 3 (no eye tracking), so it blurs side panels; off is better for desktop
+  work if the iGPU keeps up.
+- "vaapi" **is** the Intel GPU's hardware encoder; `h264`/`h265` is only the codec. This GPU
+  (Raptor Lake UHD) encodes H.264 and HEVC (`vainfo`), not AV1. Codec is set in the PC's
+  `config.json` (`"encoder": {"encoder": "vaapi", "codec": "h265"}`), applied on server restart.
+  The user switched to **h265**; the log then shows `vaapi (h265 8-bit)` at the same size and
+  bitrate. Whether it looks better was not reported.
+- If the encoder can't keep up: lower the headset refresh rate (72 Hz) before resolution.
 - 20 panels: RAM is the limit (16 GB laptop had ~6 GB free), not CPU or the stream. Plan
   ~6–10 panels, mostly 1080p/720p; idle Wayland panels cost almost nothing.
 - `vr-term` opens a tall terminal (1080×1920, font 15), which the user asked for to read text

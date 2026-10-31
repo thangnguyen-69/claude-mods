@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Wait until WayVR answers on its IPC socket, i.e. it is running AND the headset is worn
+# (WayVR does not reply while it is not FOCUSED).
+#   vr-ready [timeout_seconds]   default 300; exit 0 = ready, 1 = timed out
+# Don't wait on log lines instead: when WiVRn launches WayVR, WayVR logs into the
+# WiVRn server log, so ~/.local/state/wayvr-manual.log can be stale and lie.
+t=${1:-300}; end=$((SECONDS + t))
+while (( SECONDS < end )); do
+  timeout 3 wayvrctl window-list >/dev/null 2>&1 && exit 0
+  sleep 2
+done
+echo "vr-ready: WayVR did not respond within ${t}s" >&2
+exit 1

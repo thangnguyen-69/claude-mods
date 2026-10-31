@@ -1,0 +1,3 @@
+#!/bin/sh
+# Spotify (Flathub) inside WayVR: force Electron onto Wayland so it uses WayVR's compositor.
+exec flatpak run com.spotify.Client --enable-features=UseOzonePlatform --ozone-platform=wayland "$@"

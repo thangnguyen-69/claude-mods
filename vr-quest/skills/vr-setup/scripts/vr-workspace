@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Open your VR workspace: each app from the list, once, inside WayVR.
+# WayVR puts each app back where you last saved it (leave Edit mode on the watch to save).
+# Positions are keyed by app name, so a second copy of an app opens at the default spot:
+# this script skips apps that are already running in WayVR.
+#
+# List: ~/.config/vr-workspace  (created with defaults on first run)
+#   <process-name>  <launcher on PATH or absolute>  <WxH>
+# process-name is what `wayvrctl process-list` shows (alacritty, spotify, chrome...).
+# WxH is capped by WayVR at 2560x1440.
+set -uo pipefail
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/vr-workspace"
+if [[ ! -f $CONF ]]; then
+  cat >"$CONF" <<'LIST'
+# process-name  launcher       size
+alacritty       alacritty-vr   1080x1440
+spotify         spotify-vr     1280x720
+chrome          chrome-vr      1920x1080
+LIST
+  echo "Created $CONF"
+fi
+
+vr-ready "${VR_READY_TIMEOUT:-300}" || exit 1
+running=$(timeout 10 wayvrctl process-list 2>/dev/null | tail -1)
+
+while read -r name launcher size _; do
+  [[ -z ${name:-} || $name == \#* ]] && continue
+  if grep -q "\"name\":\"$name\"" <<<"$running"; then
+    echo "$name: already open"
+    continue
+  fi
+  exe=$(command -v "$launcher" || true)
+  [[ -x $exe ]] || { echo "$name: launcher '$launcher' not found"; continue; }
+  if timeout 20 wayvrctl process-launch -n "$name" "$exe" "$size" anchored >/dev/null 2>&1; then
+    echo "$name: opened"
+  else
+    echo "$name: launch failed"
+  fi
+  sleep 3   # let each window map before the next, so restores don't race
+done <"$CONF"
