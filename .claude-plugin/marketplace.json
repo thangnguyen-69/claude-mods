@@ -26,7 +26,7 @@
     {
       "name": "vr-quest",
       "source": "./vr-quest",
-      "description": "Immersed VR + Meta Quest on GNOME/Wayland: virtual and portrait displays, monitor layout, and a diagnostic toolkit for frozen-screen bugs"
+      "description": "Meta Quest VR desktop on Linux: Immersed (virtual/portrait displays, layout, frozen-screen diagnostics) or free WiVRn + WayVR (USB, hand tracking, apps in VR)"
     }
   ]
 }

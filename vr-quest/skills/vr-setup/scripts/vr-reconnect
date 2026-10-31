@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Re-open WiVRn on the Quest over USB after leaving the VR session.
+# WayVR, its apps and the server keep running on the PC, so nothing is lost.
+set -euo pipefail
+[[ $(adb get-state 2>/dev/null || true) == device ]] || { echo "No authorized headset on USB; open WiVRn in the headset instead."; exit 1; }
+pkg=$(adb shell pm list packages | tr -d '\r' | sed -n 's/^package:\(.*wivrn.*\)$/\1/Ip' | head -1)
+adb reverse tcp:9757 tcp:9757 >/dev/null
+adb shell am start -a android.intent.action.VIEW -d "wivrn+tcp://localhost" "$pkg" >/dev/null
+echo "Reconnecting the headset... put it on."

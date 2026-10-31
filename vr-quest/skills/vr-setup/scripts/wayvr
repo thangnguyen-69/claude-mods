@@ -1,0 +1,13 @@
+#!/bin/sh
+# Launch the WayVR standalone binary with Valve's libopenvr_api.so on the library path.
+#
+# Why a wrapper: the WayVR AppImage can fail outright (AppImageLauncher's binfmt hook
+# cannot read the new AppImage runtime), and libopenvr_api.so is not packaged on Fedora.
+# So run the release's standalone `wayvr` binary and point it at a copy of the library.
+#
+#   WAYVR_BIN      the standalone binary  (default: newest ~/Applications/wayvr-v*)
+#   WAYVR_LIB_DIR  folder holding libopenvr_api.so  (default: ~/Applications/lib)
+WAYVR_BIN="${WAYVR_BIN:-$(ls -d "$HOME"/Applications/wayvr-v* 2>/dev/null | grep -vi appimage | sort -V | tail -1)}"
+WAYVR_LIB_DIR="${WAYVR_LIB_DIR:-$HOME/Applications/lib}"
+[ -x "$WAYVR_BIN" ] || { echo "wayvr: no binary found; set WAYVR_BIN" >&2; exit 1; }
+LD_LIBRARY_PATH="$WAYVR_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$WAYVR_BIN" "$@"

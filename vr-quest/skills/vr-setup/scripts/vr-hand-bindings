@@ -1,0 +1,95 @@
+#!/usr/bin/python3
+"""Write ~/.config/wayvr/openxr_actions.json5 with Quest hand tracking that acts like controllers.
+
+WHY THIS EXISTS
+    WayVR's built-in hand profile (/interaction_profiles/ext/hand_interaction_ext) binds
+    only the pinches and NO pose. It expects eye tracking to aim, which a Quest 3 lacks,
+    so with hands the wrist watch never appears and nothing points.
+
+WHAT IT WRITES
+    The full default bindings, extracted from the installed WayVR binary (so the other
+    controller profiles stay exactly as shipped), with only the hand profile replaced:
+        pose  = aim/pose of each hand   -> a ray from each hand, watch follows left wrist
+        click = RIGHT pinch
+        grab  = LEFT pinch
+    Do NOT bind grab to grasp_ext: pointing curls the other fingers, grasp fires, and the
+    screen gets grabbed and thrown while you merely point.
+
+    Re-run after every WayVR update: the file replaces the defaults wholesale.
+
+USAGE
+    vr-hand-bindings            # write the file (backs up an existing one)
+    vr-hand-bindings --print    # print the result, write nothing
+    WAYVR_BIN=/path/to/wayvr vr-hand-bindings
+"""
+import glob
+import os
+import re
+import shutil
+import sys
+import time
+
+HAND_BLOCK_RE = re.compile(
+    r'  \{\n    profile: "/interaction_profiles/ext/hand_interaction_ext",.*?\n  \},', re.S)
+
+NEW_HAND_BLOCK = '''  // vr-hand-bindings: Quest hand tracking acts like controllers.
+  // Ray from each hand (watch follows the left wrist). Right pinch = click, left pinch = grab.
+  // (grasp_ext is deliberately unused: it fires while pointing and throws screens away.)
+  {
+    profile: "/interaction_profiles/ext/hand_interaction_ext",
+    pose: {
+      left: "/user/hand/left/input/aim/pose",
+      right: "/user/hand/right/input/aim/pose"
+    },
+    click: {
+      right: "/user/hand/right/input/pinch_ext/value"
+    },
+    grab: {
+      left: "/user/hand/left/input/pinch_ext/value"
+    },
+  },'''
+
+
+def find_binary():
+    env = os.environ.get("WAYVR_BIN")
+    if env:
+        return env
+    cands = [p for p in glob.glob(os.path.expanduser("~/Applications/wayvr-v*"))
+             if "appimage" not in p.lower() and os.path.isfile(p)]
+    if not cands:
+        sys.exit("No WayVR binary found; set WAYVR_BIN")
+    key = lambda p: [int(x) for x in re.findall(r"\d+", os.path.basename(p))]
+    return sorted(cands, key=key)[-1]
+
+
+def extract_defaults(path):
+    data = open(path, "rb").read()
+    start = data.find(b"// Available bindings:")
+    if start < 0:
+        sys.exit(f"Default bindings not found in {path}; WayVR's layout changed, re-check by hand")
+    end = data.find(b"\n]", start)
+    return data[start:end + 2].decode()
+
+
+def main():
+    binary = find_binary()
+    text = extract_defaults(binary)
+    if len(HAND_BLOCK_RE.findall(text)) != 1:
+        sys.exit("Expected exactly one hand_interaction_ext block in the defaults; not patching")
+    out = HAND_BLOCK_RE.sub(lambda _m: NEW_HAND_BLOCK, text)
+    if "--print" in sys.argv:
+        print(out)
+        return
+    dest = os.path.expanduser("~/.config/wayvr/openxr_actions.json5")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if os.path.exists(dest):
+        bak = dest + time.strftime(".bak-%Y%m%d-%H%M%S")
+        shutil.copy2(dest, bak)
+        print(f"backed up {bak}")
+    with open(dest, "w") as f:
+        f.write(out)
+    print(f"wrote {dest} (defaults from {os.path.basename(binary)}); restart WayVR to load it")
+
+
+if __name__ == "__main__":
+    main()

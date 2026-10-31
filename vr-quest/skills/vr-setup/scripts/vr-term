@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Open a tall, large-font terminal inside WayVR (a VR-only window, not on the desktop).
+#   vr-term              1080x1920 (portrait)
+#   vr-term 1920x1080    any WxH
+# Needs WayVR to be FOCUSED (headset on): wayvrctl gets no reply while it is not.
+exec wayvrctl process-launch -n Terminal "$(command -v alacritty-vr)" "${1:-1080x1920}" anchored

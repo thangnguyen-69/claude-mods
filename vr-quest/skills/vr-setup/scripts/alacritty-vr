@@ -1,0 +1,5 @@
+#!/bin/sh
+# Alacritty tuned for reading in VR: larger font. Extra args pass through.
+# wayvrctl's process-launch cannot pass "-o ..." args itself, hence this wrapper.
+ALACRITTY="${ALACRITTY:-$(command -v alacritty || echo "$HOME/.cargo/bin/alacritty")}"
+exec "$ALACRITTY" -o "font.size=${VR_FONT_SIZE:-15}" "$@"

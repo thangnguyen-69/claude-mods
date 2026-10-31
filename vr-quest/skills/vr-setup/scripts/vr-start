@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Cold-start a WiVRn session on the Quest: USB cable if adb sees an authorized headset,
+# otherwise Wi-Fi. WayVR is NOT launched here: WiVRn starts it on connect via the
+# "application" key in its config.json (see wivrn-wayvr.md).
+#
+# Always begins with a fresh WayVR: a WayVR left over from a dropped session can hang
+# and show only black. Use vr-reconnect instead to rejoin and keep open VR apps.
+set -euo pipefail
+WAYVR_BIN="${WAYVR_BIN:-$(ls -d "$HOME"/Applications/wayvr-v* 2>/dev/null | grep -vi appimage | sort -V | tail -1)}"
+[ -n "$WAYVR_BIN" ] || { echo "No WayVR binary found; set WAYVR_BIN" >&2; exit 1; }
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}"
+mkdir -p "$STATE"
+# ^-anchored so it never matches this script's own command line.
+wayvr_pids() { pgrep -f "^$WAYVR_BIN( |\$)" || true; }
+
+if ! pgrep -x wivrn-server >/dev/null; then
+  echo "Starting wivrn-server..."
+  # Flathub build: distro packages often lag the Meta Store client, and versions must match exactly.
+  setsid nohup flatpak run --command=wivrn-server io.github.wivrn.wivrn >"$STATE/wivrn-server.log" 2>&1 </dev/null &
+  sleep 2
+fi
+
+if [[ -n $(wayvr_pids) ]]; then
+  echo "Stopping old WayVR..."
+  kill $(wayvr_pids) 2>/dev/null || true
+  for _ in 1 2 3 4 5 6; do [[ -z $(wayvr_pids) ]] && break; sleep 0.5; done
+  [[ -n $(wayvr_pids) ]] && kill -9 $(wayvr_pids) 2>/dev/null || true
+fi
+
+adb start-server >/dev/null
+state=$(adb get-state 2>/dev/null || true)
+if [[ $state != device ]]; then
+  ip=$(ip -4 -o route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+  [[ -n $(adb devices | grep -w unauthorized || true) ]] && \
+    echo "Headset is on USB but UNAUTHORIZED: toggle USB debugging off/on in the headset, replug, Allow."
+  echo "Using Wi-Fi: in the headset open WiVRn and pick this PC (or add it manually: $ip)."
+  echo "WayVR starts automatically once the headset connects."
+  exit 0
+fi
+
+adb reverse tcp:9757 tcp:9757 >/dev/null
+pkg=$(adb shell pm list packages | tr -d '\r' | sed -n 's/^package:\(.*wivrn.*\)$/\1/Ip' | head -1)
+if [[ -z $pkg ]]; then
+  echo "WiVRn app not found on the headset; install it from the Meta Store."
+  exit 1
+fi
+echo "Launching $pkg on the headset..."
+adb shell am start -a android.intent.action.VIEW -d "wivrn+tcp://localhost" "$pkg" >/dev/null
+
+echo "Waiting for the session..."
+for _ in $(seq 1 15); do [[ -n $(wayvr_pids) ]] && break; sleep 1; done
+if [[ -z $(wayvr_pids) ]]; then
+  echo "WiVRn didn't start WayVR; starting it directly."
+  setsid nohup wayvr --replace --show --headless >"$STATE/wayvr-manual.log" 2>&1 </dev/null &
+fi
+echo "Connected over USB. Put the headset on."
