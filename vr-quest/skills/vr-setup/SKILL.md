@@ -212,6 +212,11 @@ Re-confirmed 2026-10-31 on Fedora 42 / GNOME 48.8 / Intel UHD (laptop panel `eDP
 (`(0, 0) 1440x2560`, `(1440, 0) 2560x1080`) but the physical screen still at `(0, 0)` — and the
 laptop screen stopped updating in VR. So only the physical/primary capture is stale; virtual
 screens can be rearranged freely as long as the physical one stays at (0,0).
+`EnableAreaCapture=0` in `~/.ImmersedConf` does **not** fix it (tested the same day: the physical
+capture still reported `(0, 0)` and froze). Why x>0 is unavoidable: Mutter's stage starts at (0,0),
+so the leftmost monitor must sit at x=0 — "left of the laptop" always means moving the laptop right.
+Workable answer: keep the physical screen at (0,0) and arrange screens by dragging them in VR
+(Immersed stores VR positions relative to the physical screen and accepts negative ones there).
 
 - Safe: `DP-1` stays at x=0, portrait at x=1920, third screen at x=3360.
 - Unsafe: portrait at x=0 with `DP-1` moved to x=1440.
