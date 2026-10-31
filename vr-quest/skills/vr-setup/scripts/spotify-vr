@@ -1,3 +1,12 @@
 #!/bin/sh
-# Spotify (Flathub) inside WayVR: force Electron onto Wayland so it uses WayVR's compositor.
+# Spotify (Flathub) inside WayVR, at the size WayVR was asked for.
+#
+# Why cage: WayVR applies the requested window size only to a process it launched itself,
+# matched by PID. A Flatpak app's window comes from a sandboxed child PID, so WayVR treats it
+# as "external" and uses its 1920x1080 default (Spotify's own saved size is ignored too).
+# exec-ing cage keeps the launched PID, cage is the Wayland client WayVR sizes, and Spotify
+# fills cage's output. Without cage installed, falls back to a plain (1920x1080) launch.
+if command -v cage >/dev/null 2>&1; then
+  exec cage -- flatpak run com.spotify.Client --enable-features=UseOzonePlatform --ozone-platform=wayland "$@"
+fi
 exec flatpak run com.spotify.Client --enable-features=UseOzonePlatform --ozone-platform=wayland "$@"

@@ -1,6 +1,6 @@
 {
   "name": "vr-quest",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Set up and debug a Meta Quest VR desktop on Linux: Immersed VR (virtual and portrait displays, monitor layout, frozen-screen diagnostics) or the free WiVRn + WayVR stack (USB, hand tracking, apps in VR, recovery scripts)",
   "author": {
     "name": "Thang Nguyen"

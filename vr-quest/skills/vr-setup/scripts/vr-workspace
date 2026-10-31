@@ -14,7 +14,7 @@ if [[ ! -f $CONF ]]; then
   cat >"$CONF" <<'LIST'
 # process-name  launcher       size
 alacritty       alacritty-vr   1080x1440
-spotify         spotify-vr     1280x720
+spotify         spotify-vr     800x600
 chrome          chrome-vr      1920x1080
 LIST
   echo "Created $CONF"

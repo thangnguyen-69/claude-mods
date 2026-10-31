@@ -68,7 +68,7 @@ Install all of them from this skill's `scripts/` (see SKILL.md's install block).
 | `vr-workspace` | open each app in `~/.config/vr-workspace` once; they return to saved spots |
 | `vr-term` | open a tall large-font terminal *inside* VR |
 | `alacritty-vr` | Alacritty with a bigger font (used by `vr-term`, `vr-workspace`) |
-| `spotify-vr` | Spotify (Flathub) forced onto Wayland so it opens in VR |
+| `spotify-vr` | Spotify (Flathub) inside `cage`, so WayVR's requested size applies |
 | `chrome-vr` | Chrome with a separate VR profile, so it opens in VR, not the desktop |
 | `vr-fix` | WayVR hung / black: kill, restart, reopen the workspace when the headset is on |
 | `vr-hand-bindings` | write hand-tracking bindings that act like controllers |
@@ -140,6 +140,15 @@ There is no "Connect via USB" button in the headset; that button is in the PC-si
   their window on the desktop instead of in VR.
 - Clipboard does **not** sync with GNOME: WayVR needs `ext_data_control_manager_v1`, which Mutter
   lacks.
+- **WayVR applies the requested size only to processes it launched itself**, matched by PID
+  (`backend/wayvr/mod.rs`). A Flatpak app's window comes from a sandboxed child PID, so the log
+  says `External process ID … connected` and the window gets WayVR's **1920×1080** default; the
+  app's own saved size is ignored as well. Fix: run it inside **`cage`** (`dnf install cage`):
+  `exec cage -- flatpak run …` keeps the launched PID, WayVR sizes cage, and the app fills cage's
+  output. Verified: Spotify at 800×600. Non-Flatpak apps (Alacritty) take the size directly; Chrome
+  also restores its own `window_placement` from its profile's `Preferences`.
+- Single-instance apps (Spotify, Chrome per profile) hand a new launch to the running copy and
+  exit, so close the old one first, or nothing new opens (with cage, cage exits too).
 - Window size is capped at **2560×1440** (`WAYVR_SCREEN_RES` in `backend/wayvr/mod.rs`, a
   constant): a 1080×1920 request opens as 1080×1440. The tallest portrait is 1440 high.
 - `wayvrctl show-hide` twice = hide then show the set, which re-places it in front of you. Quest
