@@ -1,0 +1,234 @@
+#!/usr/bin/python3
+"""Capture a one-shot diagnostic snapshot of the Immersed/Mutter streaming state.
+
+Usage:
+    vr-diag                 # write one snapshot, print its path
+    vr-diag --label before  # tag the snapshot (e.g. before/after/during-hang)
+    vr-diag --compare A B   # print the key differences between two snapshots
+    vr-diag --list          # list snapshots
+
+Why: the "physical screen freezes in VR" symptom has been misdiagnosed several
+times. The decisive data is a BEFORE/AFTER pair around a layout change, taken on
+the SAME session, with timestamps, so correlation cannot be confused with cause.
+"""
+
+import datetime
+import glob
+import json
+import os
+import subprocess
+import sys
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+OUT = os.path.expanduser("~/.local/state/vr-diag")
+SIG = "(ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv})"
+
+
+def sh(cmd, timeout=6):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout or "") + (r.stderr or "")
+    except Exception as e:  # noqa: BLE001
+        return f"<error: {e}>"
+
+
+def display_state():
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        st = bus.call_sync("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
+                           "org.gnome.Mutter.DisplayConfig", "GetCurrentState", None,
+                           GLib.VariantType(SIG), Gio.DBusCallFlags.NONE, -1, None)
+        u = st.unpack()
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+
+    monitors = {}
+    for mon in u[1]:
+        conn = mon[0][0]
+        cur = None
+        for mode in mon[1]:
+            if (mode[6] or {}).get("is-current"):
+                cur = mode[0]
+                break
+        monitors[conn] = {"current_mode": cur, "n_modes": len(mon[1])}
+
+    logical = [
+        {"connector": lm[5][0][0], "x": lm[0], "y": lm[1],
+         "primary": bool(lm[4]), "scale": lm[2]}
+        for lm in u[2]
+    ]
+    return {"serial": u[0], "monitors": monitors, "logical": logical}
+
+
+def immersed_pid():
+    out = sh("pgrep -f '/usr/bin/Immersed' | head -1").strip()
+    return out or None
+
+
+def latest_log():
+    logs = sorted(glob.glob(os.path.expanduser("~/.Immersed/Logs/*.txt")))
+    return logs[-1] if logs else None
+
+
+def screen_info(path, want_tail=3):
+    """Return the last N `Screen Info` blocks as raw text."""
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, errors="replace") as f:
+        lines = f.read().splitlines()
+    idx = [i for i, l in enumerate(lines) if "Screen Info" in l]
+    blocks = []
+    for i in idx[-want_tail:]:
+        ts = ""
+        for j in range(i - 1, max(0, i - 40), -1):
+            if lines[j].startswith("2026-"):
+                ts = lines[j][:19]
+                break
+        blocks.append({"timestamp": ts,
+                       "lines": [l for l in lines[i:i + 11] if l.strip()][:8]})
+    return blocks
+
+
+def usb_state():
+    dev = glob.glob("/sys/bus/usb/devices/*/idProduct")
+    for p in dev:
+        try:
+            if open(p).read().strip() == "5013":  # Quest 3
+                d = os.path.dirname(p)
+                return {"path": d,
+                        "speed": open(os.path.join(d, "speed")).read().strip(),
+                        "version": open(os.path.join(d, "version")).read().strip()}
+        except Exception:  # noqa: BLE001
+            pass
+    return {"path": None}
+
+
+def tunnel():
+    return {
+        "adb_reverse": sh("adb reverse --list").strip(),
+        "ss_21013": sh("ss -tn 2>/dev/null | grep ':21013' | head -2").strip(),
+        "ss_info": sh("ss -tin 2>/dev/null | grep -A1 '127.0.0.1:21013' | head -4").strip(),
+    }
+
+
+def resources():
+    return {
+        "mem": sh("free -h | sed -n '2,3p'").strip(),
+        "loadavg": sh("cat /proc/loadavg").strip(),
+        "vcn_busy": sh("cat /sys/class/drm/card1/device/vcn_busy_percent").strip(),
+        "gpu_busy": sh("cat /sys/class/drm/card1/device/gpu_busy_percent").strip(),
+        "idle_hint": sh("loginctl show-user $(id -u) -p IdleHint").strip(),
+        "powersave": sh("gdbus call --session --dest org.gnome.Mutter.DisplayConfig "
+                        "--object-path /org/gnome/Mutter/DisplayConfig --method "
+                        "org.freedesktop.DBus.Properties.Get "
+                        "org.gnome.Mutter.DisplayConfig PowerSaveMode").strip(),
+    }
+
+
+def damage_errors(since_minutes=15):
+    out = sh(f"journalctl --user -S '-{since_minutes} min' --no-pager 2>/dev/null "
+             f"| grep -c 'Not enough buffers'")
+    return out.strip()
+
+
+def snapshot(label):
+    os.makedirs(OUT, exist_ok=True)
+    pid = immersed_pid()
+    log = latest_log()
+    snap = {
+        "taken_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "label": label,
+        "immersed_pid": pid,
+        "immersed_proc": sh(f"ps -o pid,stat,pcpu,pmem,etime -p {pid} 2>/dev/null").strip() if pid else None,
+        "log_path": log,
+        "display": display_state(),
+        "usb": usb_state(),
+        "tunnel": tunnel(),
+        "resources": resources(),
+        "damage_errors_last15min": damage_errors(),
+        "screen_info": screen_info(log),
+    }
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = f"diag-{stamp}-{label}.json" if label else f"diag-{stamp}.json"
+    path = os.path.join(OUT, name)
+    with open(path, "w") as f:
+        json.dump(snap, f, indent=2)
+    return path, snap
+
+
+def brief(snap):
+    d = snap.get("display", {})
+    print(f"  at {snap['taken_at']}  label={snap.get('label')}  "
+          f"immersed_pid={snap.get('immersed_pid')}")
+    if "logical" in d:
+        lay = ", ".join(f"{l['connector']}@{l['x']}{'*' if l['primary'] else ''}"
+                        for l in d["logical"])
+        print(f"  layout   : {lay}")
+    u = snap.get("usb", {})
+    print(f"  usb      : speed={u.get('speed')} ver={u.get('version')}")
+    t = snap.get("tunnel", {})
+    print(f"  adb rev  : {t.get('adb_reverse', '').replace(chr(10), ' | ')}")
+    r = snap.get("resources", {})
+    print(f"  load     : {r.get('loadavg')}")
+    print(f"  vcn/gpu  : {r.get('vcn_busy')}/{r.get('gpu_busy')}")
+    print(f"  idle     : {r.get('idle_hint')}   powersave={r.get('powersave')}")
+    print(f"  damage15m: {snap.get('damage_errors_last15min')}")
+    for b in snap.get("screen_info", []):
+        print(f"  --- block {b['timestamp']}")
+        for l in b["lines"]:
+            if l.startswith("Capture") or l.startswith("Encoder") or l.startswith("ScreenID"):
+                print("    " + l)
+
+
+def compare(a_path, b_path):
+    a = json.load(open(a_path))
+    b = json.load(open(b_path))
+    print("=== A ===")
+    brief(a)
+    print("=== B ===")
+    brief(b)
+    print("=== DIFFS ===")
+
+    def line(label, va, vb):
+        mark = "   " if va == vb else ">> "
+        print(f"{mark}{label}: {va!r} -> {vb!r}")
+
+    line("immersed_pid", a.get("immersed_pid"), b.get("immersed_pid"))
+    line("layout", a["display"].get("logical"), b["display"].get("logical"))
+    line("usb_speed", a["usb"].get("speed"), b["usb"].get("speed"))
+    line("adb_reverse", a["tunnel"].get("adb_reverse"), b["tunnel"].get("adb_reverse"))
+    line("damage15m", a.get("damage_errors_last15min"), b.get("damage_errors_last15min"))
+    line("idle_hint", a["resources"].get("idle_hint"), b["resources"].get("idle_hint"))
+    print()
+    print("NOTE: differences prove correlation only. A hang needs a THIRD snapshot "
+          "taken while the screen is actually frozen.")
+
+
+def main(argv):
+    args = [a for a in argv[1:]]
+    if "--list" in args:
+        for p in sorted(glob.glob(os.path.join(OUT, "diag-*.json"))):
+            print("  " + p)
+        return
+    if "--compare" in args:
+        i = args.index("--compare")
+        try:
+            compare(args[i + 1], args[i + 2])
+        except (IndexError, FileNotFoundError) as e:
+            print(f"need two snapshot paths: {e}")
+            sys.exit(2)
+        return
+    label = ""
+    if "--label" in args:
+        i = args.index("--label")
+        label = args[i + 1] if i + 1 < len(args) else ""
+    path, snap = snapshot(label)
+    print(f"wrote {path}")
+    brief(snap)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

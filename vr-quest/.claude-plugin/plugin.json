@@ -1,0 +1,8 @@
+{
+  "name": "vr-quest",
+  "version": "0.1.0",
+  "description": "Set up and debug Immersed VR with a Meta Quest on GNOME/Wayland: virtual displays, portrait screens, monitor layout, and a diagnostic toolkit for the frozen-screen class of bugs",
+  "author": {
+    "name": "Thang Nguyen"
+  }
+}

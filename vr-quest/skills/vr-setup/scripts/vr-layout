@@ -1,0 +1,227 @@
+#!/usr/bin/python3
+"""Re-apply the desired Immersed/Mutter monitor layout.
+
+WHY THIS EXISTS
+    Immersed re-applies its own monitor config on every session change, so a
+    hand-applied layout is NOT durable. After a headset reconnect the layout
+    typically reverts to Immersed's default packing:
+        (0,0) DP-1 primary | (1920,0) Meta-0 | (3360,0) Meta-1
+    This script re-establishes the layout we actually want.
+
+SAFETY
+    - `save` snapshots the CURRENT layout to a JSON file before you change anything.
+    - `restore` re-applies the most recent snapshot (or a named one).
+    - `apply` re-applies the desired layout.
+    - Never invents a mode: every mode string is read back from Mutter, so a
+      monitor that is unplugged or has no current mode is skipped with a message
+      instead of being sent a bogus value.
+    - Refuses to run if the monitor set differs from the saved layout.
+
+USAGE
+    vr-layout save            # snapshot current layout -> ~/.config/vr-layouts/
+    vr-layout apply           # apply the desired (portrait-left) layout
+    vr-layout restore [name]  # restore a snapshot (default: most recent)
+    vr-layout show            # print current + saved layouts, change nothing
+    vr-layout list            # list snapshots
+
+NOTE ON method: ApplyMonitorsConfig's second arg is the persistence hint:
+    0 = verify, 1 = temporary (reverts on hotplug), 2 = persistent.
+    We default to 1. Pass `--persist` to use 2 instead.
+"""
+
+import json
+import os
+import sys
+import glob
+import datetime
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+BUS_NAME = "org.gnome.Mutter.DisplayConfig"
+OBJ = "/org/gnome/Mutter/DisplayConfig"
+IFACE = "org.gnome.Mutter.DisplayConfig"
+
+# Read signature and write signature DIFFER -- do not swap them.
+SIG_READ = "(ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv})"
+SIG_WRITE = "(uua(iiduba(ssa{sv}))a{sv})"
+
+STORE = os.path.expanduser("~/.config/vr-layouts")
+
+# The layout we want: portrait on the left, physical primary in the middle,
+# small screen on the right. Negative x is rejected by Mutter, so "left of
+# primary" is expressed by putting the portrait at 0 and shifting others right.
+DESIRED = [
+    {"connector": "Meta-0", "x": 0,    "y": 0, "primary": False},
+    {"connector": "DP-1",   "x": 1440, "y": 0, "primary": True},
+    {"connector": "Meta-1", "x": 3360, "y": 0, "primary": False},
+]
+
+
+def bus():
+    return Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+
+def read_state(b=None):
+    b = b or bus()
+    state = b.call_sync(
+        BUS_NAME, OBJ, IFACE, "GetCurrentState", None,
+        GLib.VariantType(SIG_READ), Gio.DBusCallFlags.NONE, -1, None,
+    )
+    serial, monitors, logical = state.unpack()[0], state.unpack()[1], state.unpack()[2]
+
+    info = {}
+    for mon in monitors:
+        connector = mon[0][0]
+        current = None
+        for mode in mon[1]:
+            props = mode[6] or {}
+            if props.get("is-current"):
+                current = mode[0]
+                break
+        info[connector] = {"mode": current, "n_modes": len(mon[1])}
+
+    layout = []
+    for lm in logical:
+        x, y, scale, _transform, primary, mons = lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]
+        layout.append({
+            "connector": mons[0][0],
+            "x": x, "y": y,
+            "scale": scale,
+            "primary": bool(primary),
+        })
+    return {"serial": serial, "monitors": info, "layout": layout}
+
+
+def show(state, label):
+    print(f"--- {label} (serial {state['serial']}) ---")
+    by_conn = {l["connector"]: l for l in state["layout"]}
+    for conn, m in sorted(state["monitors"].items()):
+        l = by_conn.get(conn)
+        pos = f"x={l['x']:>5} y={l['y']:>4}" if l else "x=    ? y=   ?"
+        prim = "PRIMARY" if l and l["primary"] else ""
+        print(f"  {conn:9} {pos}  mode={str(m['mode']):22} {prim}")
+    print()
+
+
+def save():
+    os.makedirs(STORE, exist_ok=True)
+    state = read_state()
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = os.path.join(STORE, f"layout-{stamp}.json")
+    with open(path, "w") as f:
+        json.dump(state, f, indent=2)
+    show(state, "SAVED")
+    print(f"wrote {path}")
+    return path
+
+
+def list_snapshots():
+    paths = sorted(glob.glob(os.path.join(STORE, "layout-*.json")))
+    if not paths:
+        print("no snapshots")
+        return []
+    for p in paths:
+        kind = "restorable" if os.path.basename(p)[7:8].isdigit() else "named (apply only)"
+        print(f"  [{kind}] {p}")
+    return paths
+
+
+def apply_layout(spec, persist):
+    """Apply `spec` (list of {connector,x,y,primary}). Returns True on success."""
+    b = bus()
+    state = read_state(b)
+
+    required = [s["connector"] for s in spec]
+    missing = [c for c in required if c not in state["monitors"]]
+    if missing:
+        print(f"ABORT: connector(s) not present: {', '.join(missing)}")
+        print("       (headset disconnected, or Immersed not running)")
+        return False
+
+    logical = []
+    for s in spec:
+        conn = s["connector"]
+        mode = state["monitors"][conn]["mode"]
+        if not mode:
+            print(f"ABORT: {conn} has no current mode")
+            return False
+        logical.append((
+            s["x"], s["y"], s.get("scale", 1.0), 0,
+            s["primary"], [(conn, mode, {})],
+        ))
+
+    method = 2 if persist else 1
+    try:
+        b.call_sync(
+            BUS_NAME, OBJ, IFACE, "ApplyMonitorsConfig",
+            GLib.Variant(SIG_WRITE, (int(state["serial"]), method, logical, {})),
+            None, Gio.DBusCallFlags.NONE, -1, None,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR from Mutter: {e}")
+        return False
+
+    show(read_state(b), "AFTER APPLY")
+    return True
+
+
+def restore(name, persist):
+    # Only timestamped snapshots (layout-YYYYmmdd-HHMMSS.json) are candidate
+    # restores. Named layouts such as layout-desired-*.json are what `apply`
+    # reproduces; they must never be picked up as the "safe" fallback, or the
+    # emergency command would re-apply the very layout you are escaping.
+    paths = sorted(glob.glob(os.path.join(STORE, "layout-[0-9]*.json")))
+    if not paths:
+        print("no timestamped snapshots to restore (use `vr-layout save` first)")
+        return False
+    if name:
+        match = [p for p in paths if name in os.path.basename(p)]
+        if not match:
+            print(f"no snapshot matching {name!r}")
+            return False
+        path = match[-1]
+    else:
+        path = paths[-1]
+    print(f"restoring {path}")
+    with open(path) as f:
+        saved = json.load(f)
+
+    spec = [
+        {"connector": l["connector"], "x": l["x"], "y": l["y"],
+         "scale": l.get("scale", 1.0), "primary": l["primary"]}
+        for l in saved["layout"]
+    ]
+    return apply_layout(spec, persist)
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "show"
+    persist = "--persist" in argv
+    argv = [a for a in argv if not a.startswith("--")]
+
+    if cmd == "save":
+        save()
+    elif cmd == "show":
+        show(read_state(), "CURRENT")
+        print("desired:")
+        for d in DESIRED:
+            print(f"  {d['connector']:9} x={d['x']:>5} y={d['y']:>4} "
+                  f"{'PRIMARY' if d['primary'] else ''}")
+    elif cmd == "list":
+        list_snapshots()
+    elif cmd == "apply":
+        ok = apply_layout(DESIRED, persist)
+        sys.exit(0 if ok else 1)
+    elif cmd == "restore":
+        name = argv[2] if len(argv) > 2 else None
+        ok = restore(name, persist)
+        sys.exit(0 if ok else 1)
+    else:
+        print(__doc__)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

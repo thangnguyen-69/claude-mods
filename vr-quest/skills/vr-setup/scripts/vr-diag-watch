@@ -1,0 +1,93 @@
+#!/bin/bash
+# Watch Immersed/Mutter streaming state and capture evidence around a hang.
+#
+#   vr-diag-watch start [interval]   start background sampling (default 30s)
+#   vr-diag-watch hang               IMMEDIATELY snapshot, for when it freezes
+#   vr-diag-watch stop               stop the watcher
+#   vr-diag-watch status             is it running?
+#
+# The point: the "physical screen freezes in VR" symptom has been misdiagnosed
+# repeatedly because evidence was gathered after the fact. Press/type `hang` the
+# moment the picture freezes and we get state *during* the failure.
+#
+# Snapshots land in ~/.local/state/vr-diag/ and are compared with:
+#   vr-diag --compare <before.json> <during-hang.json>
+
+set -u
+STATE="$HOME/.local/state/vr-diag"
+PIDFILE="$STATE/watch.pid"
+LOG="$STATE/watch.log"
+DIAG="$HOME/.local/bin/vr-diag"
+
+mkdir -p "$STATE"
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+case "${1:-status}" in
+  start)
+    interval="${2:-30}"
+    if is_running; then
+      echo "already running (pid $(cat "$PIDFILE"))"
+      exit 0
+    fi
+    [ -x "$DIAG" ] || { echo "missing $DIAG"; exit 1; }
+    setsid nohup bash -c '
+      interval="$1"; state="$2"; diag="$3"
+      n=0
+      while :; do
+        n=$((n+1))
+        "$diag" --label "watch-$n" >/dev/null 2>&1
+        sleep "$interval"
+      done
+    ' _ "$interval" "$STATE" "$DIAG" >"$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    echo "watching every ${interval}s (pid $!, log $LOG)"
+    echo "when it freezes run:  vr-diag-watch hang"
+    ;;
+
+  hang)
+    # Take a snapshot immediately, and note that this one is the interesting one.
+    if [ -x "$DIAG" ]; then
+      out=$("$DIAG" --label "HANG-$(date +%H%M%S)")
+      echo "$out" | head -20
+      echo
+      echo "compare against the newest pre-hang snapshot with:"
+      pre=$(ls -1 "$STATE"/diag-*watch-*.json 2>/dev/null | tail -1)
+      post=$(ls -1 "$STATE"/diag-*HANG-*.json 2>/dev/null | tail -1)
+      [ -n "$pre" ] && [ -n "$post" ] && echo "  vr-diag --compare '$pre' '$post'"
+      echo
+      echo "ALSO NOTE (human observation, not captured by this tool):"
+      echo "  - was the physical monitor showing the desktop, or dark/blanked?"
+      echo "  - was the cursor moving on it?"
+    else
+      echo "missing $DIAG"
+    fi
+    ;;
+
+  stop)
+    if is_running; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null
+      rm -f "$PIDFILE"
+      echo "stopped"
+    else
+      echo "not running"
+    fi
+    ;;
+
+  status)
+    if is_running; then
+      echo "running (pid $(cat "$PIDFILE"))"
+      echo "snapshots: $(ls -1 "$STATE"/diag-*.json 2>/dev/null | wc -l)"
+      echo "latest:    $(ls -1t "$STATE"/diag-*.json 2>/dev/null | head -1)"
+    else
+      echo "not running"
+    fi
+    ;;
+
+  *)
+    sed -n '2,20p' "$0"
+    exit 2
+    ;;
+esac

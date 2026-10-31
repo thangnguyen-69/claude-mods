@@ -22,6 +22,11 @@
       "name": "human-review",
       "source": "./human-review",
       "description": "Claude teaches you its change (walkthrough + diagrams), then reviews it with you in Plannotator until Approve"
+    },
+    {
+      "name": "vr-quest",
+      "source": "./vr-quest",
+      "description": "Immersed VR + Meta Quest on GNOME/Wayland: virtual and portrait displays, monitor layout, and a diagnostic toolkit for frozen-screen bugs"
     }
   ]
 }
