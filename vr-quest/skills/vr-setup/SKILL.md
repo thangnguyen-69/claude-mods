@@ -75,7 +75,11 @@ headset, and opens Immersed there over adb; the user then presses **Connect**.
 **Per-place profiles:** `vr-immersed --save home` stores the current virtual-display slots
 (`VDData`) and `LocalMaxBitrate` in `~/.config/vr-layouts/immersed/profiles/home.profile`;
 `vr-immersed home` stops the agent (it rewrites its config on exit), patches only those two
-values into `~/.ImmersedConf` (backup first), and starts it. `--list` shows profiles. VR screen
+values into `~/.ImmersedConf` (backup first), and starts it — or skips the restart when that
+profile is already active. `vr-immersed --link home` ties the current Wi-Fi SSID to the profile
+(`~/.config/vr-layouts/immersed/places`, `SSID=profile` lines); plain `vr-immersed` then picks
+the linked profile automatically and leaves the setup alone on unlinked networks. `--list` shows
+profiles and links. VR screen
 positions live on the headset and window-to-monitor placement can't be scripted on GNOME Wayland,
 so neither is part of a profile. It finds the newest
 `~/Applications/Immersed*.AppImage` — AppImageLauncher may have moved/renamed the file there

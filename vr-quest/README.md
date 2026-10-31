@@ -29,7 +29,7 @@ vr-quest/
     SKILL.md            # stack picker + the Immersed procedure and traps
     wivrn-wayvr.md      # the WiVRn + WayVR procedure and traps
     scripts/
-      vr-immersed       # Immersed: start the agent + open Immersed on the Quest over USB
+      vr-immersed       # Immersed: start + open on the Quest; per-place profiles (auto by Wi-Fi)
       vr-layout         # Immersed: save / apply / restore the Mutter monitor layout
       vr-diag           # Immersed: one-shot diagnostic snapshot (+ --compare)
       vr-diag-watch     # Immersed: background sampler; `hang` = immediate capture
