@@ -19,7 +19,7 @@ SAFETY
 
 USAGE
     vr-layout save            # snapshot current layout -> ~/.config/vr-layouts/
-    vr-layout apply           # apply the desired (portrait-left) layout
+    vr-layout apply           # apply the desired layout (desired.json, else built-in)
     vr-layout restore [name]  # restore a snapshot (default: most recent)
     vr-layout show            # print current + saved layouts, change nothing
     vr-layout list            # list snapshots
@@ -52,11 +52,17 @@ STORE = os.path.expanduser("~/.config/vr-layouts")
 # The layout we want: portrait on the left, physical primary in the middle,
 # small screen on the right. Negative x is rejected by Mutter, so "left of
 # primary" is expressed by putting the portrait at 0 and shifting others right.
+# Override per machine with ~/.config/vr-layouts/desired.json (same list format);
+# connector names differ between hosts (DP-1, eDP-1, Meta-0, ...).
 DESIRED = [
     {"connector": "Meta-0", "x": 0,    "y": 0, "primary": False},
     {"connector": "DP-1",   "x": 1440, "y": 0, "primary": True},
     {"connector": "Meta-1", "x": 3360, "y": 0, "primary": False},
 ]
+_desired_file = os.path.join(STORE, "desired.json")
+if os.path.exists(_desired_file):
+    with open(_desired_file) as _f:
+        DESIRED = json.load(_f)
 
 
 def bus():
