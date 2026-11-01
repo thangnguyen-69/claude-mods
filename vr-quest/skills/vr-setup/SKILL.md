@@ -393,9 +393,10 @@ Immersed Quest app 2.42.0: nothing about them is in `~/.ImmersedConf`; the heads
 `com.oculus.permission.USE_SCENE`, is not debuggable (`run-as` refused) and has no `ALLOW_BACKUP`
 flag, so its private data can't be read or backed up over adb. Its readable
 `/sdcard/Android/data/Immersed.quest/files/debug.log` logs screen snapping/anchoring but nothing
-about portals. They live on the headset, tied to the Quest's room/space; keep the same boundary
-at each place (don't clear boundary history) so the headset recognises the room. Whether
-Immersed keeps separate portals per room is unverified.
+about portals. So they live on the headset; **how** they are stored is unknown. `USE_SCENE` hints
+at room anchoring, but that is an inference — they might equally be stored relative to
+Immersed's own origin. Don't tell the user they survive a boundary reset or follow the room; ask
+them to check after reconnecting (portal present? in the right place?) and record the result.
 
 **Crisper text:** the limit is the headset (~25 px/degree on Quest 3), not the stream — a 1440-px-wide
 virtual screen already packs more pixels per degree than the headset shows, so more resolution or
