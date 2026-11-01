@@ -374,6 +374,14 @@ ones on this class of iGPU; the headset can't resolve 1440 px across a normal-si
 With this lighter load `balanced` is the better trade (cool and quiet, content still ~43 fps);
 use `performance` only for the heavy multi-screen setups.
 
+**Cooling without losing the laptop screen in VR:** don't disable the panel (that removes it from
+VR too); turn the backlight off instead — `busctl call org.freedesktop.login1
+/org/freedesktop/login1/session/auto org.freedesktop.login1.Session SetBrightness ssu backlight
+intel_backlight 0` (no root; brightness key restores). Capture FPS lives in `~/.ImmersedConf`
+`Data` → `Capture` (`FPS`, `FPSFor2`, `FPSFor4`; edit with Immersed stopped); the log confirms
+with `Set FPS - GPU: 45.000`. The cap limits **capture** only — `Screen Info` encoder FPS stays ~60
+(repeated frames, cheap on the media engine). Measured: balanced + 45 fps + backlight off = 64 °C.
+
 **Keep virtual-screen sides multiples of 16 (ideally 64).** 1080x1920 portrait was encoded as
 `H264 VAAPI 1088x1920`: padding on the *width* misaligns every row and the screen showed up
 garbled in VR. 2560x1080 is fine (padding lands on the height). Use 1152x2048, 1440x2560, etc.
