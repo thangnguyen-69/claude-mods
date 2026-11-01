@@ -6,6 +6,11 @@
 #   vr-immersed --save home   save the current screen setup as "home"
 #   vr-immersed --link home   link the current Wi-Fi network to the "home" profile
 #   vr-immersed --list        list saved profiles and Wi-Fi links
+#   vr-immersed --stop        quit Immersed (laptop + headset) and turn the laptop screen back on
+#   --keep-screen             with a start: leave the laptop backlight on
+#
+# Starting turns the laptop backlight off (the panel keeps running, so it still
+# shows in VR); the brightness key or `vr-immersed --stop` brings it back.
 #
 # A profile holds the virtual-display slots (VDData), LocalMaxBitrate and the
 # capture FPS caps (FPS / FPSFor2 / FPSFor4) from ~/.ImmersedConf. Where screens float in VR is stored by the headset, not here.
@@ -15,6 +20,27 @@ set -u
 CONF="$HOME/.ImmersedConf"
 PROFILES="$HOME/.config/vr-layouts/immersed/profiles"
 PLACES="$HOME/.config/vr-layouts/immersed/places"   # lines: <Wi-Fi SSID>=<profile>
+BL_SAVED="$HOME/.config/vr-layouts/immersed/backlight-before"
+
+# Backlight via logind: no root needed for the active session.
+backlight_dev() { ls /sys/class/backlight 2>/dev/null | head -1; }
+set_backlight() {
+  local dev; dev=$(backlight_dev); [ -n "$dev" ] || return 1
+  busctl call org.freedesktop.login1 /org/freedesktop/login1/session/auto \
+    org.freedesktop.login1.Session SetBrightness ssu backlight "$dev" "$1" >/dev/null
+}
+screen_off() {
+  local dev cur; dev=$(backlight_dev); [ -n "$dev" ] || return 0
+  cur=$(cat "/sys/class/backlight/$dev/brightness")
+  # Never save 0 as the value to restore (e.g. when run twice).
+  [ "$cur" -gt 0 ] && { mkdir -p "${BL_SAVED%/*}"; echo "$cur" > "$BL_SAVED"; }
+  set_backlight 0 && echo "Laptop screen off (still visible in VR). Brightness key or 'vr-immersed --stop' turns it back on."
+}
+screen_on() {
+  local dev val; dev=$(backlight_dev); [ -n "$dev" ] || return 0
+  val=$(cat "$BL_SAVED" 2>/dev/null); [ -n "$val" ] && [ "$val" -gt 0 ] || val=$(cat "/sys/class/backlight/$dev/max_brightness")
+  set_backlight "$val" && echo "Laptop screen back on."
+}
 
 current_ssid() { nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1; }
 
@@ -90,12 +116,21 @@ EOF
   echo "Applied profile '$name'."
 }
 
+KEEP_SCREEN=0
+args=()
+for a in "$@"; do [ "$a" = --keep-screen ] && KEEP_SCREEN=1 || args+=("$a"); done
+set -- "${args[@]+"${args[@]}"}"
+
 case "${1:-}" in
+  --stop)
+    pkill -x Immersed && echo "Immersed agent stopped." || echo "Immersed agent was not running."
+    adb get-state >/dev/null 2>&1 && adb shell am force-stop Immersed.quest >/dev/null 2>&1 && echo "Closed Immersed on the headset."
+    screen_on; exit 0 ;;
   --save) [ -n "${2:-}" ] || { echo "usage: vr-immersed --save NAME" >&2; exit 2; }; save_profile "$2"; exit 0 ;;
   --link) [ -n "${2:-}" ] || { echo "usage: vr-immersed --link NAME" >&2; exit 2; }; link_place "$2"; exit 0 ;;
-  --list) echo "Profiles:"; ls "$PROFILES" 2>/dev/null | sed 's/\.profile$/   /; s/^/  /'
+  --list) echo "Profiles:"; ls "$PROFILES" 2>/dev/null | sed -n 's/\.profile$//p' | sed 's/^/  /'
           echo "Wi-Fi links:"; sed 's/^/  /' "$PLACES" 2>/dev/null; exit 0 ;;
-  -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
   "")
     ssid=$(current_ssid); auto=$(profile_for_ssid "$ssid")
     if [ -n "$auto" ]; then
@@ -121,3 +156,4 @@ if adb get-state >/dev/null 2>&1; then
 else
   echo "Headset not on USB/adb; open Immersed on the headset yourself and press Connect."
 fi
+[ "$KEEP_SCREEN" = 1 ] || screen_off
