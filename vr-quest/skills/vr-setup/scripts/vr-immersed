@@ -7,8 +7,8 @@
 #   vr-immersed --link home   link the current Wi-Fi network to the "home" profile
 #   vr-immersed --list        list saved profiles and Wi-Fi links
 #
-# A profile holds the virtual-display slots (VDData) and LocalMaxBitrate from
-# ~/.ImmersedConf. Where screens float in VR is stored by the headset, not here.
+# A profile holds the virtual-display slots (VDData), LocalMaxBitrate and the
+# capture FPS caps (FPS / FPSFor2 / FPSFor4) from ~/.ImmersedConf. Where screens float in VR is stored by the headset, not here.
 # Immersed rewrites ~/.ImmersedConf when it exits, so applying a profile stops
 # the agent first (the headset has to press Connect again).
 set -u
@@ -31,7 +31,8 @@ profile_active() {
   local file="$PROFILES/$1.profile"
   [ -f "$file" ] || return 1
   [ "$(grep '^VDData=' "$CONF")" = "$(grep '^VDData=' "$file")" ] || return 1
-  [ "$(grep -o 'LocalMaxBitrate[^,]*' "$CONF" | head -1)" = "$(sed -n 's/^#bitrate //p' "$file")" ]
+  [ "$(grep -o 'LocalMaxBitrate[^,]*' "$CONF" | head -1)" = "$(sed -n 's/^#bitrate //p' "$file")" ] || return 1
+  [ "$(grep -o -E '\\*"FPS(For[0-9])?\\*":[0-9.]+' "$CONF")" = "$(sed -n 's/^#fps //p' "$file")" ]
 }
 
 link_place() {
@@ -52,6 +53,7 @@ save_profile() {
   {
     grep '^VDData=' "$CONF"
     grep -o 'LocalMaxBitrate[^,]*' "$CONF" | head -1 | sed 's/^/#bitrate /'
+    grep -o -E '\\*"FPS(For[0-9])?\\*":[0-9.]+' "$CONF" | sed 's/^/#fps /'
   } > "$PROFILES/$name.profile"
   echo "Saved profile '$name' -> $PROFILES/$name.profile"
 }
@@ -77,6 +79,12 @@ br = next((l for l in lines if l.startswith(b"#bitrate ")), None)
 if br:
     val = re.search(rb":\s*([0-9.]+)", br).group(1)
     s = re.sub(rb'(LocalMaxBitrate\\*":)[0-9.]+', lambda m: m.group(1) + val, s, count=1)
+for l in lines:
+    if l.startswith(b"#fps "):
+        m = re.match(rb'#fps (\\*"(FPS(?:For[0-9])?)\\*":)([0-9.]+)', l)
+        if m:
+            key, val = m.group(2), m.group(3)
+            s = re.sub(rb'(\\*"' + key + rb'\\*":)[0-9.]+', lambda mm: mm.group(1) + val, s, count=1)
 open(conf, "wb").write(s)
 EOF
   echo "Applied profile '$name'."

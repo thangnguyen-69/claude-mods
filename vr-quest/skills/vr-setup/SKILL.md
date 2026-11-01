@@ -73,8 +73,8 @@ Day-to-day start: `vr-immersed` starts the agent if it isn't running, closes WiV
 headset, and opens Immersed there over adb; the user then presses **Connect**.
 
 **Per-place profiles:** `vr-immersed --save home` stores the current virtual-display slots
-(`VDData`) and `LocalMaxBitrate` in `~/.config/vr-layouts/immersed/profiles/home.profile`;
-`vr-immersed home` stops the agent (it rewrites its config on exit), patches only those two
+(`VDData`), `LocalMaxBitrate` and the capture FPS caps in `~/.config/vr-layouts/immersed/profiles/home.profile`;
+`vr-immersed home` stops the agent (it rewrites its config on exit), patches only those
 values into `~/.ImmersedConf` (backup first), and starts it — or skips the restart when that
 profile is already active. `vr-immersed --link home` ties the current Wi-Fi SSID to the profile
 (`~/.config/vr-layouts/immersed/places`, `SSID=profile` lines); plain `vr-immersed` then picks
