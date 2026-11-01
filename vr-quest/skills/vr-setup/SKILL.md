@@ -397,6 +397,12 @@ about portals. So they live on the headset; **how** they are stored is unknown. 
 at room anchoring, but that is an inference — they might equally be stored relative to
 Immersed's own origin. Don't tell the user they survive a boundary reset or follow the room; ask
 them to check after reconnecting (portal present? in the right place?) and record the result.
+Docs checked 2026-11-01: Immersed's help centre (immersed.com/docs → immersed.helpscoutdocs.com;
+Getting Started, Connecting Screens, FAQ, How-To) has **no article** on workspaces, saving
+layouts, portals or boundaries. Only sources: the Apple App Store listing ("remembers your screen
+layout and resolution locally on your headset"; Vision Pro build) and 2022 news of the portals
+launch (shapes placed over desk/doorway; nothing on persistence). For a definitive answer use the
+in-app Help chat or Immersed's Discord.
 
 **Crisper text:** the limit is the headset (~25 px/degree on Quest 3), not the stream — a 1440-px-wide
 virtual screen already packs more pixels per degree than the headset shows, so more resolution or
