@@ -366,10 +366,17 @@ in GNOME. A copy of the working config is worth keeping (`cp ~/.ImmersedConf <so
 | Screens | Total | Capture fps | Encoded fps |
 |---|---|---|---|
 | laptop 1920x1200 + 2x 1440x2560 | ~9.7 MP | 43–49 | **21–30** (choppy scrolling) |
-| laptop 1920x1200 + 1x 1080x1920 (`1920x1080 IsRotated:true`) | ~4.4 MP | 55–56 | **60** |
+| laptop 1920x1200 + 1x 1152x2048 (`2048x1152 IsRotated:true`) | ~4.7 MP | 52–54 | **60** |
+| same, `balanced` profile | ~4.7 MP | 43 | 58–60 — and **77 → 66 °C**, fan 3985 → 3450 rpm |
 
-Immersed CPU fell from ~2.5 to ~1.4 cores. Prefer one 1080x1920 portrait screen over 1440x2560
+Immersed CPU fell from ~2.5 to ~1.4 cores. Prefer one ~1152x2048 portrait screen over 1440x2560
 ones on this class of iGPU; the headset can't resolve 1440 px across a normal-sized screen anyway.
+With this lighter load `balanced` is the better trade (cool and quiet, content still ~43 fps);
+use `performance` only for the heavy multi-screen setups.
+
+**Keep virtual-screen sides multiples of 16 (ideally 64).** 1080x1920 portrait was encoded as
+`H264 VAAPI 1088x1920`: padding on the *width* misaligns every row and the screen showed up
+garbled in VR. 2560x1080 is fine (padding lands on the height). Use 1152x2048, 1440x2560, etc.
 
 **Crisper text:** the limit is the headset (~25 px/degree on Quest 3), not the stream — a 1440-px-wide
 virtual screen already packs more pixels per degree than the headset shows, so more resolution or
