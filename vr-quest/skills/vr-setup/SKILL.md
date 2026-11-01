@@ -388,6 +388,15 @@ with `Set FPS - GPU: 45.000`. The cap limits **capture** only — `Screen Info` 
 `H264 VAAPI 1088x1920`: padding on the *width* misaligns every row and the screen showed up
 garbled in VR. 2560x1080 is fine (padding lands on the height). Use 1152x2048, 1440x2560, etc.
 
+**Passthrough portals (and screen positions) can't be saved from the PC.** Checked 2026-11-01,
+Immersed Quest app 2.42.0: nothing about them is in `~/.ImmersedConf`; the headset app has
+`com.oculus.permission.USE_SCENE`, is not debuggable (`run-as` refused) and has no `ALLOW_BACKUP`
+flag, so its private data can't be read or backed up over adb. Its readable
+`/sdcard/Android/data/Immersed.quest/files/debug.log` logs screen snapping/anchoring but nothing
+about portals. They live on the headset, tied to the Quest's room/space; keep the same boundary
+at each place (don't clear boundary history) so the headset recognises the room. Whether
+Immersed keeps separate portals per room is unverified.
+
 **Crisper text:** the limit is the headset (~25 px/degree on Quest 3), not the stream — a 1440-px-wide
 virtual screen already packs more pixels per degree than the headset shows, so more resolution or
 bitrate won't help. Bigger glyphs do: raise app font sizes (Alacritty `[font] size = 15`, Chrome
