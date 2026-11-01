@@ -361,6 +361,16 @@ performance restored 48–57 fps — capture (CPU + PipeWire threads), not the G
 profile limits. Arrange left/right **in VR** (Immersed's screen swap / drag), never by moving `eDP-1`
 in GNOME. A copy of the working config is worth keeping (`cp ~/.ImmersedConf <somewhere>`).
 
+**Pixel budget on Intel UHD (i5-1335U), measured 2026-11-01, performance profile, AC power:**
+
+| Screens | Total | Capture fps | Encoded fps |
+|---|---|---|---|
+| laptop 1920x1200 + 2x 1440x2560 | ~9.7 MP | 43–49 | **21–30** (choppy scrolling) |
+| laptop 1920x1200 + 1x 1080x1920 (`1920x1080 IsRotated:true`) | ~4.4 MP | 55–56 | **60** |
+
+Immersed CPU fell from ~2.5 to ~1.4 cores. Prefer one 1080x1920 portrait screen over 1440x2560
+ones on this class of iGPU; the headset can't resolve 1440 px across a normal-sized screen anyway.
+
 **Crisper text:** the limit is the headset (~25 px/degree on Quest 3), not the stream — a 1440-px-wide
 virtual screen already packs more pixels per degree than the headset shows, so more resolution or
 bitrate won't help. Bigger glyphs do: raise app font sizes (Alacritty `[font] size = 15`, Chrome
