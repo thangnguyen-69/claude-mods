@@ -707,6 +707,133 @@ port. On this class of host the Quest often negotiates **480 Mb/s USB 2.0** behi
 hub even when a USB 3 port is free; that caps the link but at these bitrates (tens of kbps to a few
 Mbps) it is not the bottleneck. Do not "fix" stutter by changing cables without measuring first.
 
+## 13. Tracing stutter: where the frames actually go
+
+Established 2026-11-03 on Ubuntu 24.04 / GNOME 46.0 / libmutter 46.2 / Ryzen 7 8700G + 780M,
+three virtual screens, Quest 3 over USB. Use this when the report is **"video isn't smooth"** rather
+than "the screen is frozen" — a different failure with different evidence.
+
+### The path, and what to measure at each hop
+
+| # | Hop | How to measure | Healthy |
+|---|---|---|---|
+| 1 | Mutter ScreenCast → PipeWire | `Capture - "Wayland" … @ N FPS` | ~60 |
+| 2 | PipeWire → Immersed (BGRA, SHM) | `pw-top`; watch the `ERR` column | no growth |
+| 3 | BGRA→NV12 → VAAPI H.264 (VCN) | encoder `FPS:` on the same block | ~60 |
+| 4 | adb tunnel `:21013` | `ss -tni`, `bytes_sent` delta | ≪ link, `send-q=0` |
+| 5 | Quest decode | `adb shell … debug.log` | no `dequeueOutputBuffer timeout` |
+
+**The stutter is made at hop 1 on this class of hardware, and you can prove it without a profiler.**
+Two numbers on one `Screen Info` block settle it:
+
+- `Capture - … @ N FPS` is *unique frames captured per second*.
+- encoder `FPS:` stays pinned near 60 regardless.
+
+When capture < encode, the encoder is re-sending the previous frame. That gap **is** the judder:
+motion advances in uneven steps. Measured on three screens in one session:
+
+```
+1440x2560 (3.69 MP)  capture 51.0   -> ~9 duplicate frames/s (15%)
+2560x1080 (2.76 MP)  capture 54.0   -> ~6/s (10%)
+1280x720  (0.92 MP)  capture 58.6   -> ~1.4/s (2%)
+```
+
+Capture FPS falls monotonically with pixels, with encoder, decoder and link held constant — so the
+limiter is the capture stage, not encoding, not transport, and not the headset.
+
+### The two tests that separate capture from everything downstream
+
+1. **Pixel-count sweep.** Same session, three screen sizes, encoder at 60 on all three. If capture
+   FPS tracks pixels inversely, it is the capture stage. (A per-pixel cost model is *not* valid —
+   see the CPU note below.)
+2. **Full-screen video playback.** Play a real video fullscreen on one virtual screen and re-read
+   capture FPS. Measured: the ultrawide stayed at **52.3 fps vs 52.4 baseline while its bitrate
+   rose 150 → 1645 kbps**. Content demand is irrelevant — capture is out of time, not starved of
+   change. If playback instead *raises* capture toward 60, you are damage-limited, not
+   throughput-limited, and the fix is different.
+
+Fitting the three points gives roughly **15.5 ms of fixed cost per frame against a 16.67 ms
+budget**. Anything larger than ~1 MP misses the deadline and slips to the next slot; 720p squeaks
+through at 58.6. That is the whole mechanism.
+
+### Separate stutter source: refresh-rate mismatch
+
+The Quest panel reports **90.00 Hz** while the stream is 60 fps
+(`adb shell dumpsys SurfaceFlinger | grep 'VSYNC period'` → `11111111 ns`). 60 into 90 is 3:2
+pulldown: every frame is held 1 or 2 refreshes, giving inherent judder in content motion. **No
+capture-side fix makes 60 fps on 90 Hz clean** — do not promise that it will, and do not chase it
+as a capture bug. Check the panel rate before concluding the stream is at fault.
+
+### What does NOT explain it
+
+- **The USB link.** Measured **683 kbit/s** against a 480 Mbit/s USB 2.0 link, `send-q=0`,
+  `retrans 0/5`. The link is ~0.1% used. Do not tune bitrate for stutter.
+- **The encoder clock.** `pp_dpm_vclk` reaches **2400 MHz** at load and `socclk` 1200 MHz. A single
+  `head -1` read of `pp_dpm_vclk` returns level 0 and looks like 800 MHz — **that is a parsing
+  error, not a stuck clock**. Always `grep '\*'` for the active level.
+- **Pixel count as a CPU lever.** It is not one (see §9). Shrinking screens helps the *encoder* and
+  the *capture deadline*; it saves ~0.0 cores.
+
+### Quest-side decoder: `NO_MEMORY` → silent software fallback
+
+A separate, intermittent fault on the headset, worth ruling out whenever the *whole* stream is
+choppy rather than one screen:
+
+```
+E AndroidVideoDecoder: decode() - no HW buffers available; decoder falling behind
+E AndroidVideoDecoder: initDecode failed  android.media.MediaCodec$CodecException
+E AndroidVideoDecoder: initDecode failed MCandroid.media.MediaCodec.error_neg_19 -19
+W AndroidVideoDecoder: reinit status:FALLBACK_SOFTWARE
+```
+
+`-19` is `NO_MEMORY`. Once it happens the stream decodes **on the headset's CPU**, which looks like
+stutter at every resolution. Over the log's history: 549 × `error_neg_19`, 465 × `FALLBACK_SOFTWARE`.
+
+**The healthy-vs-broken discriminator is the timeout counter, not the decode counter.** In a broken
+session `dequeueOutputBuffer timeout` climbed to **5231** with the decode count frozen, and an
+orphaned decoder thread kept polling after its surface was gone
+(`We couldn't find …#0 surface to remove!`). In a healthy session the count is **0** — a decoder
+that keeps up does not log. Note the decode count itself can sit at a fixed value on an idle stream,
+so a frozen counter alone does *not* prove starvation; look for the timeout spam.
+
+Contributing condition: the headset runs tight — **278 MB free of 7.9 GB** with ~1 GB swapped.
+Four streams contending for HW decoders is what tips it over. Remedy is a Quest restart / fewer
+simultaneous streams, not a PC-side change.
+
+### Two host-side things that look like VR stutter
+
+- **Mutter drops capture frames outright** — `gnome-shell: Not enough buffers (16) to accommodate
+  damaged regions (N)`, thousands of occurrences per boot. This is Mutter failing to get a capture
+  buffer. It is a **skipped frame**, distinct from the throughput ceiling above, and it persists
+  until gnome-shell is restarted (a full logout/login on Wayland — `Alt+F2 r` does not reload).
+- **A browser running with hardware acceleration disabled** burns CPU in the same window as the
+  capture. Check `hardware_acceleration_mode.enabled` in `Local State` and whether the GPU process
+  carries `--use-gl=disabled` / `--disable-gpu`. Software video decode competing with capture is
+  self-inflicted and cheap to fix.
+
+### Profiling honestly
+
+`perf`/`bpftrace` need `perf_event_paranoid ≤ 1` or root; on a locked-down host (`= 4`) both refuse
+to sample userspace. **Say so rather than implying you profiled.** Everything above comes from
+counters — `/proc`, `pw-top`, the `Screen Info` block, `adb logcat`, and Mutter's D-Bus — and those
+are sufficient to localise stutter to a hop. If you do get privileges:
+
+```bash
+sudo perf record -F 999 -g -p $(pgrep -x Immersed) -- sleep 20
+sudo perf report --stdio --sort symbol | head -40
+```
+
+### Ordered remedy list for stutter
+
+1. Read one `Screen Info` block; if `Capture` < `Encode` on every screen, it is the capture ceiling.
+2. Check the Quest decoder log for `dequeueOutputBuffer timeout` / `FALLBACK_SOFTWARE` — a headset
+   restart may fix more than any PC tuning.
+3. Check the panel refresh rate for a 60-into-90 pulldown mismatch (unfixable from the PC).
+4. Reduce total pixels **only for encoder saturation or capture-deadline misses** — expect ~0.0
+   cores saved.
+5. Remove competing CPU/IO work (VMs, pollers, software-rendered browser). This is the only measured
+   CPU lever on such a box.
+
 ## Honesty rules
 
 - Do not state a maximum resolution. `MaximumScreenPixel` / `MaximumScreenWidth/Height` are
@@ -736,3 +863,13 @@ Mbps) it is not the bottleneck. Do not "fix" stutter by changing cables without 
   while the agent keeps running (see §12).
 - Do not treat `TCP: true. USB: true`, a listening `21000`, or a stale encoder line as evidence of a
   live session.
+- On "video isn't smooth", do not blame the link or the encoder before reading capture vs encode FPS
+  on one block. Measured: capture 51–54 fps against encoder 60 pinned, on a link 0.1% utilised
+  (see §13).
+- Do not claim a 60 fps stream on a 90 Hz panel can be made smooth by changing PC-side settings —
+  3:2 pulldown is inherent (see §13).
+- Do not read a frozen Quest `decode count:` as decoder starvation by itself; the signal is
+  `dequeueOutputBuffer timeout` spam, and `error_neg_19` / `FALLBACK_SOFTWARE` (see §13).
+- Do not imply you profiled with `perf`/`bpftrace` unless you actually ran them. With
+  `perf_event_paranoid > 1` and no root they refuse to sample userspace — say so and use the
+  counters in §13 instead.
