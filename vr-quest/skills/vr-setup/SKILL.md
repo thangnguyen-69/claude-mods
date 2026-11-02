@@ -627,6 +627,86 @@ Two ways back, in order of certainty:
 **Ordering matters for VR:** Immersed's virtual monitors exist only inside a running GNOME session, so
 recovery is (1) get a session, then (2) launch Immersed. Immersed cannot bootstrap a session.
 
+## 12. What actually persists — and what you cannot save from the PC
+
+Asked repeatedly, so state it plainly rather than letting someone chase a nonexistent feature.
+
+**No physical output is required.** Unplugging the monitor mid-session works: Immersed's virtual
+monitors become the session's outputs once they exist, so the session survives losing the physical
+display (verified: 3 → 2 screens, offsets stayed correct, no crash). Only *bootstrapping* a session
+with zero outputs is unsupported — see §11. Turning the physical panel off via DDC, DPMS or Mutter is
+therefore unnecessary on a desktop; simply not plugging it in is the answer. The laptop "backlight
+off" trick in §8 does not apply to an external monitor (`/sys/class/backlight` is empty).
+
+**`VDData` is the only persisted layout, and it holds no positions.** Four fixed slots of `Width`,
+`Height`, `IsEnabled`, `IsRotated`. Screen *positions* are never written by Immersed — the binary has
+only receive-side symbols (`didReceiveDisplaySetOriginList`, `appliyDisplayOriginList`). They arrive
+from the headset and are re-derived each session. So no profile, of any name, can restore where screens
+sit.
+
+**Mutter auto-saves the virtual layout to `~/.config/monitors.xml`, but it will not restore it the same
+way.** Mutter picks an entry by *which connectors are present*, and `Meta-*` connectors only exist
+while streaming — so after a replug it selects a different entry and re-packs the screens. Re-run
+`vr-layout apply` against a current `desired.json` instead of expecting persistence.
+
+**Snap-grid / StageLayout lives only on the headset.** Immersed on the PC has zero snap-related strings;
+`~/.ImmersedConf` has no key for it. There is **no adb write path** — `run-as` is refused
+(`package not debuggable`), there is no root, and the state sits in private Unity `shared_prefs`. The
+only workable channel is *readback*: `debug.log` is world-readable, so
+
+```bash
+adb shell cat /sdcard/Android/data/Immersed.quest/files/debug.log \
+  | grep -E 'AFTER snapGridIndices|Committing snapGridIndices' | tail -5
+```
+
+gives you a snapshot after each change. It is a backup, not a restore.
+
+**Diagnosing "snapping doesn't work" — from the headset, never the PC.** Snaps can register, commit and
+still not stick. Three signatures seen together:
+
+- a monitor re-anchoring to the same snap point every cycle (`Anchoring monitor 0 to snap point 0`),
+  which force-sets follow mode and pushes every other screen off (`Non-anchor snapped, forcing follow
+  mode off`)
+- two monitors swapping points in a loop, each clearing the other's claim (`Clearing snapGridIndex N
+  for monitor M` in both directions)
+- **`BFEORE` and `AFTER` arrays identical in every pair** — the decisive one. Across 37 cycles it read
+  `0, 2, 1, 3, 4` both before and after, i.e. the commit writes back what it read, so each drag
+  re-derives to the same assignment
+
+Note the array is 5 wide but every `snap to N` observed was 1–3; with one point reserved by the anchor
+that leaves too few for three screens, which is a plausible tie. Untested remedy: unsnap everything,
+snap the smallest screen **last**, and keep the anchor monitor off the grid until the others settle.
+
+**Audio is on by default and costs nothing.** `EnableAudio` is a single config key (toggle it in
+Settings — `settings_enable_audio_clicked`; there is **no `--enable-audio` CLI flag**: `enable_audio_cli`
+is a UI element id). It records the current default sink's monitor at `s16le, 16000 Hz, mono`. Measured
+`audioThread` at **0.000 cores** — treated as a suspect for stutter only as wasted effort.
+
+**Never edit `~/.ImmersedConf` while the agent runs** — it rewrites the file on exit. And back it up
+before touching it: `Client` holds an encrypted auth token, so every `.bak` copy is a credential.
+
+**`VDData` slots 2 and 3 ship byte-identical, so a content-based replace is ambiguous.** A targeted
+byte replace matches twice, not once. Find all matches, assert the count, and replace by **offset**
+(the first is slot 2). Once slot 2 is enabled it becomes unique and a plain single-occurrence replace is
+safe again. Re-run the escaping check after any patch: the file stores a doubled layer, and naive
+`json.loads` fails — a tolerant regex over `Height…IsEnabled…IsRotated…Width` works.
+
+**A session teardown does not kill the agent.** If the headset drops, Immersed logs
+`TCP Disconnected by Read Error End of file` → `Session Deinit Display` → `Reloaded screen count: 1`, and
+every screen reads `Capture - Not Running`. The agent keeps running (same PID, config untouched) and
+`0.0.0.0:21000` stays `LISTEN`. **So `Screen count is 1` plus `Capture - Not Running` means the link
+died, not the app** — no restart needed until the user reconnects.
+
+**`TCP: true. USB: true` at session start is a capability line, not the transport.** It printed `true`
+for a session that demonstrably ran wirelessly. Check `lsusb | grep 2833` and `adb devices` before
+claiming which path is in use.
+
+**A marginal USB link shows up as `error -71`, not as slowness.** `device not accepting address`,
+`can't set config #1, error -71` and repeated re-enumeration mean signal integrity — a bad cable or hub
+port. On this class of host the Quest often negotiates **480 Mb/s USB 2.0** behind a monitor's built-in
+hub even when a USB 3 port is free; that caps the link but at these bitrates (tens of kbps to a few
+Mbps) it is not the bottleneck. Do not "fix" stutter by changing cables without measuring first.
+
 ## Honesty rules
 
 - Do not state a maximum resolution. `MaximumScreenPixel` / `MaximumScreenWidth/Height` are
@@ -650,3 +730,9 @@ recovery is (1) get a session, then (2) launch Immersed. Immersed cannot bootstr
 - Do not present resolution reduction as a CPU fix. **Measured: cutting 18.8% of pixel throughput
   saved 0.0 cores** (1.77 → 1.80). Cost is per-frame bookkeeping, not per-pixel. Resolution *is* the
   right fix for encoder saturation during animated content (see §9).
+- Do not claim screen positions, snap-grid state or passthrough portals can be saved or restored from
+  the PC. None of them can (see §12).
+- Do not read `Screen count is 1` as "the agent died" — a dropped headset deinits displays in place
+  while the agent keeps running (see §12).
+- Do not treat `TCP: true. USB: true`, a listening `21000`, or a stale encoder line as evidence of a
+  live session.
