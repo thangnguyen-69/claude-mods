@@ -346,6 +346,13 @@ setsid nohup ~/.local/opt/immersed/Immersed-x86_64.AppImage >/tmp/immersed-launc
 Then wait for a `Started screen cast session` line and, after the user connects, a fresh
 `Screen Info` block.
 
+**Two caveats learned the hard way — read §11 before running this.** A restart while virtual displays
+are live can log the user out entirely (signal 6 in gnome-shell), and the launch line above inherits
+whatever `XAUTHORITY` the calling shell has, which is wrong often enough to fail outright. Also check
+that ports 21000/21003 actually released (`ss -tln | grep -E '2100[03]'`); `pgrep` alone can report
+"stopped" while a survivor still holds the pairing port and the next launch dies with
+`Setup PairingCode Server exception bind: Address already in use`.
+
 ## 8. Sizing and performance
 
 **Known-good setup on a free account + Intel UHD (Fedora 42, 2026-10-31):**
@@ -488,6 +495,27 @@ ten one-second samples at only 4.61 MP read `42, 100, 49, 44, 44, 43, 100, 99, 4
 capture held 50–57 fps and encode held 60. Judge load from the `Screen Info` capture/encode FPS,
 never from a single VCN reading.
 
+**BUT under real motion the encoder does become the limit — and then resolution is the right lever.**
+Measured 2026-11-03 on a 780M, three screens totalling 8.32 MP, playing video on the ultra-wide:
+
+| | idle desktop | video playing |
+|---|---|---|
+| VCN | ~40%, steady | **41–100%, saturating half the time** |
+| Total bitrate | 1.6 Mbps | **5.3 Mbps** |
+| Immersed CPU | 1.77 cores | 2.23 cores (+26%) |
+| Encode fps | 60.2 | 59.6 |
+
+Capture on the big screens fell ~1.5 fps and latency held at 8–9 ms, so the pipeline absorbed it — but
+VCN hit its ceiling repeatedly. **Reducing the ultra-wide from 3440x1080 to 2560x1080 recovered
+50.3 → 54.7 fps capture (+4.4, ~9%) on that screen, and the gain held even with a fourth 1920x1200
+screen added.** So:
+
+- **stutter on animated content → cut the biggest screen's pixels; this provably helps**
+- **raw CPU usage → cutting pixels barely matters** (the same change saves only ~0.2 of a core, since
+  cost scales as MP/s = pixels × that screen's capture fps, and one screen is a slice of the total)
+
+Do not sell resolution reduction as a CPU fix — it is an *encoder*-load fix.
+
 ## 10. Reading `Screen Info` without crying wolf
 
 Two traps that produce false alarms. Both were hit, and both caused wrong diagnoses.
@@ -531,7 +559,64 @@ XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.XXXXXX \
   setsid nohup ~/.local/opt/immersed/Immersed-x86_64.AppImage >/tmp/immersed-launch.log 2>&1 </dev/null &
 ```
 
+**Filter by uid — `pgrep -af Xwayland` can match the GDM greeter's server.** After a session crash the
+greeter keeps an Xwayland of its own under `/run/user/120/` (or another gdm uid). Grabbing "the first
+`-auth` path" then launches Immersed against the login screen's server and it fails. Restrict to your
+own runtime dir:
+
+```bash
+pgrep -af Xwayland | grep -oE '\-auth /run/user/'"$(id -u)"'/[^ ]+' | awk '{print $2}' | head -1
+```
+
+If that prints nothing, the live path is also discoverable directly:
+`ls -t /run/user/$(id -u)/.mutter-Xwaylandauth.*`
+
 This is not a permissions or config fault — do not debug the app over it.
+
+## 11. Restarting is not free: it can take the whole session down
+
+Established 2026-11-03. Stopping Immersed and rewriting `VDData` while virtual displays are live can
+end in a **full GNOME session crash**, not a VR reconnect.
+
+Observed: `pkill -x Immersed` (clean — process gone, ports 21000/21003 released), `VDData` slot
+patched and verified, relaunch on the wrong `XAUTHORITY` → ~35 s later
+`gnome-shell[pid]: GNOME Shell crashed with signal 6` and
+`org.gnome.Shell@wayland.service: Failed with result 'core-dump'`. Session went to `closing`; only the
+GDM greeter (a separate gdm-uid session) survived, and every app the user had open was lost.
+
+- **Signal 6 is `abort()`**, i.e. typically an assertion failure — consistent with the documented
+  `meta_monitor_mode_foreach_crtc` ← `sync_cursor_state` crash path on monitor-set changes while a
+  screencast/virtual-monitor set is live.
+- **The crash context is often unrecoverable afterwards.** After the session dies, `journalctl --user
+  -b` no longer holds that session's records, `journalctl -b` for the window may return nothing,
+  `coredumpctl list` may be empty, and there may be no kernel segfault line. If you need the cause,
+  capture `journalctl --user -b -n 200` **before** logging back in.
+- **Tell the user the real cost before stopping the agent.** "You'll need to press Connect again"
+  understates it. Say plainly that a restart with virtual displays live can log them out and close
+  everything, and that only a config file survives — their open work does not. If they are mid-task
+  or have no display attached, that is a strong reason to defer.
+- **The config change itself survives.** The patched `VDData` was intact after the crash (1536-byte
+  file, correct slots), and applied correctly on the next launch.
+
+### Recovering a session that died with no display attached
+
+A crashed session is not a lockout — with user linger enabled, SSH, tailscale and any tailnet-bound
+services keep running — but it is also not a desktop. With every DRM connector `disconnected`, GDM has
+nothing to draw on.
+
+Two ways back, in order of certainty:
+
+1. **Plug any monitor in.** One `connected` connector gives GDM something to draw on, normal login
+   resumes, and a fresh session appears in `loginctl list-sessions`. This worked in practice and took
+   under a minute.
+2. **`gnome-remote-desktop-headless`** — installed but **disabled by default**; it exists to create a
+   virtual monitor for exactly this case, and RDP is already enabled in
+   `gsettings org.gnome.desktop.remote-desktop.rdp enable`. `systemctl --user enable --now
+   gnome-remote-desktop-headless`, then RDP to port 3389. **Not verified here** — GRD headless normally
+   expects to be started by `gnome-session`, so it may refuse standalone. Do not promise it works.
+
+**Ordering matters for VR:** Immersed's virtual monitors exist only inside a running GNOME session, so
+recovery is (1) get a session, then (2) launch Immersed. Immersed cannot bootstrap a session.
 
 ## Honesty rules
 
@@ -550,3 +635,9 @@ This is not a permissions or config fault — do not debug the app over it.
 - Do not name a third-party tool from memory. Verify the repository or package exists and is the
   right project before recommending it — a "virtual display" tool was once recommended whose repo
   returned 404 while an unrelated package held the same name.
+- Do not describe stopping the agent as merely "you'll need to press Connect again". With virtual
+  displays live it can log the user out and destroy their open work (see §11). State that risk
+  explicitly before acting, and defer if they are mid-task or have no display attached.
+- Do not present resolution reduction as a CPU fix. Measure MP/s (pixels × that screen's capture fps);
+  cutting one screen saves ~0.2 of a core. It *is* the right fix for encoder saturation during
+  animated content (see §9).
