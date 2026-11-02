@@ -508,13 +508,22 @@ Measured 2026-11-03 on a 780M, three screens totalling 8.32 MP, playing video on
 Capture on the big screens fell ~1.5 fps and latency held at 8–9 ms, so the pipeline absorbed it — but
 VCN hit its ceiling repeatedly. **Reducing the ultra-wide from 3440x1080 to 2560x1080 recovered
 50.3 → 54.7 fps capture (+4.4, ~9%) on that screen, and the gain held even with a fourth 1920x1200
-screen added.** So:
+screen added.**
 
-- **stutter on animated content → cut the biggest screen's pixels; this provably helps**
-- **raw CPU usage → cutting pixels barely matters** (the same change saves only ~0.2 of a core, since
-  cost scales as MP/s = pixels × that screen's capture fps, and one screen is a slice of the total)
+**Resolution reduction relieves the ENCODER, not the CPU — measured, do not get this backwards.**
+Cutting that same 18.8% of pixel throughput (450 → 354 MP/s) changed CPU by **+0.6%: 1.77 → 1.80
+cores. Zero saving.** Immersed's CPU cost is dominated by *per-frame bookkeeping across ~143 threads*,
+not per-pixel work: `pipewire-main-l` did not move (0.35 → 0.36) despite 19% fewer pixels, and three
+streams × ~50 fps × a ~48-thread pipeline each makes the fixed cost dominate.
 
-Do not sell resolution reduction as a CPU fix — it is an *encoder*-load fix.
+So:
+- **stutter on animated content → cut the biggest screen's pixels; this provably helps VCN**
+- **high CPU → cutting pixels does nothing. Remove competing work instead** (browser, VMs, polling
+  plugins) — that is the only measured CPU lever.
+
+MP/s = pixels × that screen's capture fps is still the right *throughput* metric, but MP/s-per-core is
+a weak, non-linear heuristic (318 MP/s/core at 4.61 MP vs 233 at 8.32 MP), so do not use it to predict
+CPU savings.
 
 ## 10. Reading `Screen Info` without crying wolf
 
@@ -638,6 +647,6 @@ recovery is (1) get a session, then (2) launch Immersed. Immersed cannot bootstr
 - Do not describe stopping the agent as merely "you'll need to press Connect again". With virtual
   displays live it can log the user out and destroy their open work (see §11). State that risk
   explicitly before acting, and defer if they are mid-task or have no display attached.
-- Do not present resolution reduction as a CPU fix. Measure MP/s (pixels × that screen's capture fps);
-  cutting one screen saves ~0.2 of a core. It *is* the right fix for encoder saturation during
-  animated content (see §9).
+- Do not present resolution reduction as a CPU fix. **Measured: cutting 18.8% of pixel throughput
+  saved 0.0 cores** (1.77 → 1.80). Cost is per-frame bookkeeping, not per-pixel. Resolution *is* the
+  right fix for encoder saturation during animated content (see §9).
