@@ -431,7 +431,7 @@ Lag is **capture-bound**, not link-bound or encode-bound. Measured on a 780M:
 
 Encode stayed ~56–60 fps in both — so when capture fps drops on **all** screens, it is total-pixel
 pressure on the iGPU, not one bad display. Attack order: drop the third screen first (biggest win),
-then lower the largest resolution. Check `vcn_busy_percent` (100 = encoder saturated) and system
+then lower the largest resolution. Check `vcn_busy_percent` and system
 swap/load average — a full swap file plus high load causes **input** lag easily mistaken for
 display lag.
 
@@ -440,6 +440,99 @@ stretch, 4K (~8.3 MP) at the limit. Immersed drops fps with more screens (`FPS:6
 `FPSFor2:60`, `FPSFor4:30`). Bitrate caps are `LocalMaxBitrate:16000` / `RemoteMaxBitrate:8000`;
 raising `LocalMaxBitrate` is the free quality win.
 
+## 9. Where the work actually goes: CPU vs GPU
+
+Diagnosed 2026-11-02 on Ubuntu 24.04 / GNOME 46.0 / libmutter 46.2 / Radeon 780M by measuring
+per-thread CPU and kernel wait channels. Useful because "why is Immersed eating CPU?" and "can we
+offload to the GPU?" have precise answers.
+
+**Immersed renders nothing on the PC.** The binary contains no `vkCreateInstance` or
+`glxCreateContext`; it references `MutterScreenCastSessionProxy`. It is a *consumer* of Mutter's
+compositor output. The headset renders the room and panels. Consequences:
+
+- **`gpu_busy_percent` (3D) is unrelated to VR.** 9–30% during a three-screen session was the
+  browser and gnome-shell, not Immersed. Do not read 3D load as VR cost.
+- **The H.264 encoder IS on the GPU.** `vcn_busy_percent` is Immersed's real GPU work
+  (`Encoder Factory: NVENC: Unsupported / VAAPI: Supported`, `libva` + `libva-drm` +
+  `libdrm_amdgpu` loaded).
+
+**The CPU cost is capture plus pixel conversion — not encoding.** Thread evidence:
+
+```
+cores  state  wchan                                thread
+0.282  R      (running)                            pipewire-main-l   <- the only working thread
+0.144  S      drm_syncobj_array_wait_timeout       Immersed          <- blocked on a GPU fence
+0.164  S      hrtimer_nanosleep                    Immersed          <- 60 fps pacing
+0.142  S      hrtimer_nanosleep                    Immersed
+0.046  S      futex_do_wait                        (several)
+```
+
+`drm_syncobj_array_wait_timeout` proves the GPU is encoding while a CPU thread merely waits. So a
+raw "N cores" figure **overstates real work** — roughly a third is per-frame bookkeeping and
+waiting on GPU fences. Measured 8.32 MP over three screens reported 1.79 cores, of which
+**~1.2–1.3 was genuinely busy**, dominated by the single PipeWire thread. Quote it that way.
+
+**Why it cannot be reduced:** there is no zero-copy path. Mutter delivers shared-memory frames;
+Immersed must read each one, convert to a format VAAPI accepts (NV12 — `libswscale` is loaded and
+resident), and upload it. That is unavoidable per frame per screen: three screens at 60 fps is
+~180 frame handlings/sec. Cost scales roughly linearly with pixels (measured 4.61 MP → 0.85 cores;
+8.32 MP → 1.79 cores).
+
+**Nothing useful can be offloaded.** The dmabuf-vs-SHM choice is Mutter's ScreenCast negotiation,
+not the client's; AMD's VCN has a VPP block that could convert on-GPU but Immersed shows no vpp
+symbols; and the 3D engine's free capacity is irrelevant because a GL/Vulkan capture backend would
+be a different application. Fewer pixels remains the only lever.
+
+**`vcn_busy_percent` reaching 100 is NOT saturation.** It is bursty and independent of pixel count:
+ten one-second samples at only 4.61 MP read `42, 100, 49, 44, 44, 43, 100, 99, 49, 100` while
+capture held 50–57 fps and encode held 60. Judge load from the `Screen Info` capture/encode FPS,
+never from a single VCN reading.
+
+## 10. Reading `Screen Info` without crying wolf
+
+Two traps that produce false alarms. Both were hit, and both caused wrong diagnoses.
+
+**`Encoder ... FPS:1.01` with low bitrate is an IDLE desktop, not a stall.** H.264 emits frames only
+when pixels change, so a static screen legitimately reports ~1 fps at single-digit kbps. A healthy
+example, verified while the session was known good:
+
+```
+Screen 0: Capture "Wayland" (0,0) 1440x2560 @ 53.50 FPS | Encoder FPS:1.01 Bitrate: 2kbps
+Screen 1: Capture         (2317,11) 1280x720 @ 58.92 FPS | Encoder FPS:1.01 Bitrate: 1kbps
+```
+
+The discriminator is **`Capture - ` status plus `TotalFrame` movement**:
+- healthy idle — `Capture - "Wayland" ... @ 50–59 FPS` and `TotalFrame` still advances across blocks
+- genuine stall — `Capture - Not Running`, and `TotalFrame` identical across two blocks with
+  different timestamps
+
+Never read the encoder line alone. `0.0.0.0:21000` staying `LISTEN`, and a plausible-looking encoder
+FPS carried over from before a teardown, are likewise not evidence of a live session.
+
+**Blocks repeat.** Treat the cadence as ~5 minutes (observed `23:01:44`, `23:06:44`, `23:11:44`) and
+wait for two blocks before calling anything stable. Always confirm a block's timestamp is newer
+than the change you are reasoning about.
+
+**"Feels laggy" with healthy FPS is host contention, not VR.** Measured: capture 49.3 / 57.0 /
+51.0 fps, encode ~60, latency 3.7–8.1 ms — yet the user reported lag. The real change was on the
+host: load average 7.35 (vs ~4.0), swap 4.3 → 5.9 GiB, and GPU `power1_average` 38 → 51 W with 3D
+busy 9–11% → 23–30%. Swap thrash and competing CPU work produce input latency that feels exactly
+like display lag. Check `power1_average`, swap growth and top CPU consumers **before** re-tuning
+`VDData`. Raising GPU power with an unchanged VR config means another workload is on the iGPU.
+
+**A stale `XAUTHORITY` stops Immersed from launching at all.** The agent needs working X11 auth even
+though its display path is Wayland. Launching from a shell whose `XAUTHORITY` predates the current
+XWayland fails instantly with `Authorization required, but no authorization protocol specified`.
+Read the live path from the running server and use it:
+
+```bash
+pgrep -af Xwayland            # note the -auth path in the command line
+XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.XXXXXX \
+  setsid nohup ~/.local/opt/immersed/Immersed-x86_64.AppImage >/tmp/immersed-launch.log 2>&1 </dev/null &
+```
+
+This is not a permissions or config fault — do not debug the app over it.
+
 ## Honesty rules
 
 - Do not state a maximum resolution. `MaximumScreenPixel` / `MaximumScreenWidth/Height` are
@@ -447,6 +540,13 @@ raising `LocalMaxBitrate` is the free quality win.
 - Do not claim the headset reconnects by itself — it does not.
 - Do not claim a `ApplyMonitorsConfig` layout survives a reconnect — it does not.
 - Do not use bitrate as proof of a freeze.
+- Do not read `Encoder ... FPS:1.01` as a stall — that is an idle desktop. Use `Capture - ` status
+  and `TotalFrame` movement (see §10).
+- Do not read a single `vcn_busy_percent` reading as saturation; it is bursty (see §9).
+- Do not read `gpu_busy_percent` (3D) as VR cost — Immersed renders nothing on the PC (see §9).
 - Before asserting a cause, line up event timestamps: `journalctl --user --since` for exact
   seconds, and re-read a `Screen Info` block only if its timestamp is newer than the change.
   Several wrong diagnoses were made by skipping this.
+- Do not name a third-party tool from memory. Verify the repository or package exists and is the
+  right project before recommending it — a "virtual display" tool was once recommended whose repo
+  returned 404 while an unrelated package held the same name.
