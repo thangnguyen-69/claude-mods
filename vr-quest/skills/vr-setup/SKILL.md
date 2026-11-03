@@ -901,6 +901,11 @@ Consequences for how to diagnose this:
 - The `Capture -` offsets in `Screen Info` are the ground truth for which stream owns the origin. Mutter's
   layout decides them, so changing slot order or `vr-layout` changes which stream is smooth.
 
+**Confirmed outcome on this box (2026-11-03): 3440x1440 ultrawide at `(0,0)` + 1440x2560 terminal at
+`(3440,0)` + 1280x720 at `(0,1440)` — 9.56 MP total, ultrawide capture only **44.8 fps** — and the user
+reported the origin screen **"very smooth"**. A sub-50 capture rate on the origin stream is usable. Do not
+trade resolution away for capture fps before testing position first; at the origin the rate matters far less.
+
 **The smooth stream does NOT receive more frames — it receives them more evenly.** Measured over 94 blocks
 in one session: before the swap, the portrait at `(0,0)` was the smooth one and had the **lowest** mean
 capture (**52.9 fps**), while the lagging 720p had the **highest** (**58.8 fps**). So smoothness is not
