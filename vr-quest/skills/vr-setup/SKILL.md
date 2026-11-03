@@ -912,7 +912,27 @@ orphaned decoder thread kept polling after its surface was gone
 that keeps up does not log. Note the decode count itself can sit at a fixed value on an idle stream,
 so a frozen counter alone does *not* prove starvation; look for the timeout spam.
 
-Contributing condition: the headset runs tight — **278 MB free of 7.9 GB** with ~1 GB swapped.
+Contributing condition, stated correctly: **read `MemAvailable`, not `MemFree`.** On the Quest
+(measured 2026-11-03) `MemFree` sits at ~240 MB of 7.9 GB, which looks alarming and is **not** pressure —
+it is page cache doing its job, and `dumpsys meminfo` reports `status normal`. The real headroom was
+**~2.0 GB available (a quarter of RAM)**. What *is* constrained is the **GPU/dmabuf pool: ~1.16 GB**, a
+separate accounting from PSS that video decode buffers draw from. ~1.5 GB was also sitting in ZRAM.
+
+Who actually holds the RAM on the headset (PSS, measured 2026-11-03) — **it is not only Immersed**:
+
+| Process group | PSS |
+|---|---|
+| Immersed.quest | **1434 MB** |
+| com.oculus.browser (5 procs) | **729 MB** |
+| com.oculus.vrruntimeservice | 519 MB |
+| com.oculus.vrshell | 337 MB |
+| system | 198 MB |
+| com.oculus.facebook | 149 MB |
+| com.facebook.orca (Messenger) | 144 MB |
+| panelapp.library | 129 MB |
+| sensors / tracking / systemux / etc. | ~450 MB |
+
+Get it with `adb shell dumpsys meminfo | sed -n '/Total PSS by process/,/Total PSS by OOM/p'`.
 Four streams contending for HW decoders is what tips it over. Remedy is a Quest restart / fewer
 simultaneous streams, not a PC-side change.
 
@@ -936,7 +956,15 @@ instance mean that stream's decoder cannot get an output buffer — frames drop 
 which is exactly "this screen stutters while that one is smooth". Check the instance id against the
 failure count; a split 1-vs-2 across instances is the signature to look for.
 
-Correlates with headset memory: **196-278 MB free of 7.9 GB**, ~1 GB swapped. Levers are headset-side
+**The cause of these failures is NOT established.** An earlier version of this note blamed "196-278 MB
+free of 7.9 GB" — that was wrong on the metric (`MemFree`, not `MemAvailable`; ~2.0 GB was actually
+available, `status normal`). The failures come from the **codec service (pid ~927) failing to obtain
+output buffers**, which is consistent with a **per-stream buffer/decoder-pool sizing limit** in the app
+rather than system-wide OOM. Do not assert memory pressure as the cause without checking
+`dumpsys meminfo`'s `Free RAM` and the `DMA-BUF`/`GPU` lines first.
+Cheap test, since it is reversible: close unrelated memory users on the headset (the Oculus browser was
+**729 MB across 5 processes**, Messenger 144 MB) and see whether the failures stop. If they persist with
+headroom available, it is pool sizing and only Immersed can fix it. Levers are headset-side
 (restart the Quest app / reboot the headset, fewer simultaneous streams), not PC-side. This is a
 **different** failure from the `NO_MEMORY`/`FALLBACK_SOFTWARE` one below: fallback changes *which*
 decoder runs; `Allocation failed` means the hardware decoder *is* running but cannot get buffers.
@@ -1003,6 +1031,12 @@ sudo perf report --stdio --sort symbol | head -40
 - Do not read `Encoder ... FPS:1.01` as a stall — that is an idle desktop. Use `Capture - ` status
   and `TotalFrame` movement (see §10).
 - Do not read a single `vcn_busy_percent` reading as saturation; it is bursty (see §9).
+- Do not quote headset `MemFree` as memory pressure. `MemFree` is low on any healthy Linux box because
+  page cache uses it; read **`MemAvailable`** (Quest 2026-11-03: `MemFree` 240 MB looked alarming,
+  `MemAvailable` was **2.0 GB of 7.9 GB**, `dumpsys meminfo` said `status normal`). Quote `Free RAM`,
+  and the `DMA-BUF`/`GPU` lines, which are the pools video buffers actually contend for.
+- Do not assert that codec `Allocation failed` errors are caused by memory pressure until you have
+  checked `MemAvailable`. They are observed facts; the cause is not established (see §13).
 - Do not read `gpu_busy_percent` (3D) as VR cost — Immersed renders nothing on the PC (see §9).
 - Before asserting a cause, line up event timestamps: `journalctl --user --since` for exact
   seconds, and re-read a `Screen Info` block only if its timestamp is newer than the change.
