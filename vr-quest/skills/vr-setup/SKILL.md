@@ -900,6 +900,25 @@ Consequences for how to diagnose this:
   in one session (see also capture fps and row alignment).
 - The `Capture -` offsets in `Screen Info` are the ground truth for which stream owns the origin. Mutter's
   layout decides them, so changing slot order or `vr-layout` changes which stream is smooth.
+- **Immersed re-derives offsets rather than copying Mutter's.** A screen Mutter places at `x=0` can appear
+  in `Capture -` at `x=1123` (roughly centred inside the parent screen at that row). So an **x mismatch
+  between Mutter and `Screen Info` is normal** — the reliable check is the **y**, which tells you which
+  screen owns the origin. Judge smoothness by the `y`, not by equality with `GetCurrentState`.
+
+**Check the offsets after every layout change — staleness is possible but not guaranteed.** Applying a
+layout can propagate straight through to Immersed's capture rectangles, or leave them on the old
+position; both have been observed on the same host. After `vr-layout apply`, wait for a `Screen Info`
+block whose timestamp is **newer than the apply** and confirm the `Capture -` offsets actually moved
+before concluding anything about feel. Also note `ApplyMonitorsConfig` **may not advance the D-Bus
+serial** even when it commits — an unchanged serial is not evidence of failure, and the end state in
+`GetCurrentState` is the thing to trust.
+
+**The layout drifts off the origin without a reconnect.** Observed: a working `(0,0)` layout later read
+`(0,1120)` / `(1056,400)` / `(3440,0)` with the 720p having taken primary. `desired.json` was still
+correct and `vr-layout show` still printed the right target, so this is drift in the applied state, not
+a config fault. **So never trust a recorded layout — re-read `vr-layout show` and the `Capture -` offsets
+whenever someone reports lag**, and re-run `vr-layout apply` to restore. When *nothing* is at `(0,0)`,
+every screen judders, which is why "which one is at `(0,0)`" is the first question to ask.
 
 **Confirmed outcome on this box (2026-11-03): 3440x1440 ultrawide at `(0,0)` + 1440x2560 terminal at
 `(3440,0)` + 1280x720 at `(0,1440)` — 9.56 MP total, ultrawide capture only **44.8 fps** — and the user
@@ -1132,6 +1151,10 @@ sudo perf report --stdio --sort symbol | head -40
   while the agent keeps running (see §12).
 - Do not treat `TCP: true. USB: true`, a listening `21000`, or a stale encoder line as evidence of a
   live session.
+- Do not trust a recorded screen layout. Applied layouts drift off `(0,0)` without a reconnect; re-read
+  `vr-layout show` and the `Capture -` offsets before diagnosing judder (see §5).
+- Do not compare Mutter's `x` with the `Capture -` `x` and call a mismatch a bug. Immersed re-derives the
+  offset inside the parent screen; check the `y`, which is what decides the origin.
 - On "video isn't smooth", do not blame the link or the encoder before reading capture vs encode FPS
   on one block. Measured: capture 51–54 fps against encoder 60 pinned, on a link 0.1% utilised
   (see §13).
