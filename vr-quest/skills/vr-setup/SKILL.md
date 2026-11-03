@@ -911,11 +911,12 @@ For a layout with a tall portrait plus a wide screen, that means the portrait go
 **`x=0` alone is NOT enough** — tested 2026-11-03: a 720p stream at `(0, 1080)` (left edge, not the origin)
 was **still laggy**. So it is not the left column; it is the origin specifically.
 
-**Unresolved confound — check this before concluding "it is the origin":** in every dataset collected here,
-**slot 0 and the `(0,0)` stream were the same stream**, because Mutter packs slot 0 at the origin. "First
-stream" and "literally at `(0,0)`" therefore both fit all evidence. The separating test is to put a
-*non-slot-0* stream at `(0,0)` and slot 0 elsewhere; if the origin stream is smooth regardless of slot
-index, the rule is positional; if only slot 0 is smooth, the rule is slot ordering.
+**RESOLVED — it is the POSITION, not the slot index** (tested 2026-11-03). Slot 0 and the `(0,0)` stream
+were the same stream in every earlier dataset, so "first stream" and "literally at `(0,0)`" both fit the
+evidence. The separating test put a **non-slot-0** stream at `(0,0)` with slot 0 moved to `(1440,0)` — and the
+origin stream was **smooth regardless of slot index**. So:
+- the rule is **whatever stream's capture offset is `(0,0)`**, whatever slot it occupies;
+- **therefore any screen can be the smooth one** — you choose by arranging, not by slot order.
 
 **Mutter will reject a disconnected arrangement:** `ApplyMonitorsConfig` returns
 `InvalidArgs: Logical monitors not adjacent (16)`. Logical monitors must touch edge-to-edge, so test layouts
