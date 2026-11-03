@@ -908,6 +908,19 @@ stream gets a decoder/pipeline resource the others do not. Do not state a mechan
 **What works today:** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
 For a layout with a tall portrait plus a wide screen, that means the portrait goes in slot 0.
 
+**`x=0` alone is NOT enough** — tested 2026-11-03: a 720p stream at `(0, 1080)` (left edge, not the origin)
+was **still laggy**. So it is not the left column; it is the origin specifically.
+
+**Unresolved confound — check this before concluding "it is the origin":** in every dataset collected here,
+**slot 0 and the `(0,0)` stream were the same stream**, because Mutter packs slot 0 at the origin. "First
+stream" and "literally at `(0,0)`" therefore both fit all evidence. The separating test is to put a
+*non-slot-0* stream at `(0,0)` and slot 0 elsewhere; if the origin stream is smooth regardless of slot
+index, the rule is positional; if only slot 0 is smooth, the rule is slot ordering.
+
+**Mutter will reject a disconnected arrangement:** `ApplyMonitorsConfig` returns
+`InvalidArgs: Logical monitors not adjacent (16)`. Logical monitors must touch edge-to-edge, so test layouts
+cannot isolate a monitor — design them adjacent.
+
 ### Separate stutter source: refresh-rate mismatch
 
 The Quest panel reports **90.00 Hz** while the stream is 60 fps
