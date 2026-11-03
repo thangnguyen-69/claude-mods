@@ -916,7 +916,35 @@ Contributing condition: the headset runs tight — **278 MB free of 7.9 GB** wit
 Four streams contending for HW decoders is what tips it over. Remedy is a Quest restart / fewer
 simultaneous streams, not a PC-side change.
 
-### Two host-side things that look like VR stutter
+### Per-stream decoder starvation: `QC2V4l2Codec ... Allocation failed`
+
+**This is the log to read when SOME screens judder and others are fine** — the `debug.log` in the app's
+external files dir only records faults and is silent when healthy, so it cannot show a per-screen split.
+`logcat` can (2026-11-03):
+
+```bash
+adb logcat -d -t 3000 | grep -E 'QC2V4l2Codec|Allocation failed'
+```
+
+```
+W QC2V4l2Codec: [avcD_377] queueOutputs: Allocation failed!
+W QC2V4l2Codec: [avcD_377] queueOutputs: Allocation failed!   <- 18 in one 3000-line window
+```
+
+`avcD_NNN` is **one hardware H.264 decoder instance per stream**. Failures recurring on a *single*
+instance mean that stream's decoder cannot get an output buffer — frames drop for that stream only,
+which is exactly "this screen stutters while that one is smooth". Check the instance id against the
+failure count; a split 1-vs-2 across instances is the signature to look for.
+
+Correlates with headset memory: **196-278 MB free of 7.9 GB**, ~1 GB swapped. Levers are headset-side
+(restart the Quest app / reboot the headset, fewer simultaneous streams), not PC-side. This is a
+**different** failure from the `NO_MEMORY`/`FALLBACK_SOFTWARE` one below: fallback changes *which*
+decoder runs; `Allocation failed` means the hardware decoder *is* running but cannot get buffers.
+
+**Do not trust `debug.log`'s absence of errors as proof a stream is healthy** — it logs only faults, so
+silence means "no fault recorded", not "no fault". Use `logcat` for per-stream questions.
+
+### Quest-side decoder: `NO_MEMORY` → silent software fallback
 
 - **Mutter drops capture frames outright** — `gnome-shell: Not enough buffers (16) to accommodate
   damaged regions (N)`, thousands of occurrences per boot. This is Mutter failing to get a capture
