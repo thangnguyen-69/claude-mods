@@ -956,6 +956,13 @@ instance mean that stream's decoder cannot get an output buffer — frames drop 
 which is exactly "this screen stutters while that one is smooth". Check the instance id against the
 failure count; a split 1-vs-2 across instances is the signature to look for.
 
+**These failures are real but were shown NOT to cause the perceived lag (2026-11-03).** After
+force-stopping unrelated memory users on the headset (`adb shell am force-stop com.facebook.orca`,
+freed ~144 MB), the `Allocation failed` spam **stopped completely** — verified with a live logcat
+sample (pid 927 still logging at the time) — while the user reported the **same two screens still
+juddering**. So the allocation failures are a real, separate fault but not the stain. Do not present
+fixing them as a fix for judder.
+
 **The cause of these failures is NOT established.** An earlier version of this note blamed "196-278 MB
 free of 7.9 GB" — that was wrong on the metric (`MemFree`, not `MemAvailable`; ~2.0 GB was actually
 available, `status normal`). The failures come from the **codec service (pid ~927) failing to obtain
