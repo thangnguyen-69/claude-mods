@@ -901,6 +901,20 @@ Consequences for how to diagnose this:
 - The `Capture -` offsets in `Screen Info` are the ground truth for which stream owns the origin. Mutter's
   layout decides them, so changing slot order or `vr-layout` changes which stream is smooth.
 
+**The smooth stream does NOT receive more frames — it receives them more evenly.** Measured over 94 blocks
+in one session: before the swap, the portrait at `(0,0)` was the smooth one and had the **lowest** mean
+capture (**52.9 fps**), while the lagging 720p had the **highest** (**58.8 fps**). So smoothness is not
+"more frames arriving" — the non-origin streams deliver *more* frames but arrive unevenly, which is what
+jitter looks like. Any explanation in terms of throughput is therefore wrong; look for a timing/pacing
+difference. This also means capture fps cannot be used to rank screens (see above).
+
+**Whose defect it is: NOT established.** Do not attribute this to Mutter. Mutter supplies screen content over
+PipeWire with no evident per-screen difference and all screens captured at comparable rates; **Immersed**
+does the per-frame BGRA→NV12 conversion and the offset-rectangle upload, which is where extra per-frame work
+from a non-zero offset would sit. That is the leading suspicion, not a finding. A contained way to separate
+them: compare Mutter's per-stream capture timing (`pw-top` `WAIT`/`BUSY` per node) against Immersed's per-frame
+cost — "content arrives late" vs "Immersed's conversion is slow".
+
 **Mechanism: NOT verified.** Plausible, unproven: Immersed captures `(0,0)` on a special path (whole
 framebuffer / first stream) while other streams do offset reads and per-row realignment; or the first
 stream gets a decoder/pipeline resource the others do not. Do not state a mechanism — state the observation.
