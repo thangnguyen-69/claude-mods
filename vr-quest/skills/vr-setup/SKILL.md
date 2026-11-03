@@ -795,30 +795,27 @@ perceived smoothness. Treat them as two different questions:
 
 Ruled out while chasing this:
 
-- **Capture-row alignment — NOW THE LEADING HYPOTHESIS (reopened 2026-11-03 after a user A/B test).**
-  The only feature that splits the screens exactly the way the user reports:
+- **Capture-row alignment — TESTED AND RULED OUT (2026-11-03).** This was the leading hypothesis for
+  a while, because it was the only feature splitting the screens the way the user reported:
 
   | Screen | capture offset | `y % 4` | user verdict |
   |---|---|---|---|
-  | 1440x2560 portrait | `(0, 0)` | **0** | **smooth** |
+  | 1440x2560 portrait | `(0, 0)` | **0** | smooth |
   | 1280x720 | `(1440, 535)` | **3** | uneven |
   | 2560x1080 ultrawide | `(1440, 1255)` | **3** | uneven |
 
-  **My first refutation of this was invalid — do not repeat it.** I compared the odd-offset layout's
-  capture fps against the earlier all-`y=0` "tidy row" period, and because 54.8 vs 55.4 looked the same
-  I concluded "no effect". That was the wrong test: in the tidy-row period **every** screen was at
-  `y=0`, so the experiment had no comparison group. Worse, the metric itself was already known not to
-  predict smoothness, so using it to refute the hypothesis was circular. **A metric that cannot detect
-  the effect cannot clear the hypothesis.**
-  The user's own discriminator is much better evidence: "portrait is smoother on video, **even when I
-  show only half the screen in ultrawide and 720p**" — halving the ultrawide removes the size and
-  aspect-ratio confounds and the judder persists, which leaves placement.
-  **Mechanism (plausible, NOT yet proven):** an unaligned source offset forces per-row realignment in
-  the BGRA→NV12 conversion and/or a sub-rect upload to VAAPI, instead of a straight copy. That costs
-  time per frame and can land frames unevenly, precisely on the screens whose `y` is not a multiple of 4.
-  **Test to run:** align all three screens to `y` multiples of 4 (or all to `y=0`) and re-run the
-  three-video A/B. If the judder follows the offset, this is it. If it stays on the same physical
-  screens, it is per-stream on the headset.
+  Proposed mechanism was that an unaligned source offset forces per-row realignment in BGRA→NV12
+  and/or a sub-rect VAAPI upload instead of a straight copy. **It was tested properly and it is
+  wrong.** All three screens were aligned to `y%4=0` (`Meta-1` 535→536, `Meta-2` 1255→1480), Immersed's
+  capture rectangles were confirmed to have followed Mutter (not stale), the same three videos were
+  replayed on all three screens — and the user reported **still laggy**. Alignment is cleared.
+
+  The method is still worth keeping, because it is how a *proper* refutation is done: change ONE
+  variable, verify the change actually took effect in the capture offsets, then re-test perception.
+  Contrast with the invalid earlier attempt (below), which had no control group.
+- **Follow mode / anchoring.** All screens log `follow mode ... False`; nothing is head-locked.
+- **Content demand.** The smooth portrait carried by far the *most* motion (2541 kbps vs 79 and
+  282) — again the inverse of a "bigger draw = worse" reading.
 - **Follow mode / anchoring.** All screens log `follow mode ... False`; nothing is head-locked.
 - **Content demand.** The smooth portrait carried by far the *most* motion (2541 kbps vs 79 and
   282) — again the inverse of a "bigger draw = worse" reading.
@@ -1011,10 +1008,14 @@ sudo perf report --stdio --sort symbol | head -40
   with the **lowest** mean capture (53.2) and **widest** jitter was the one the user reported as
   **smooth**, while the highest-capture screen felt uneven (see §13). Throughput and perception are
   separate questions, and no PC-side counter substitutes for the user's eyes.
-- Do not claim a capture-offset alignment bug is ruled out. It is the **leading open hypothesis** for
-  the 1-vs-2 smoothness split and the offsets line up exactly (`y%4`: smooth screen 0, both uneven
-  screens 3). An earlier "refutation" compared against a layout where all screens were aligned, so it
-  had no control group — see §13.
+- Capture-row alignment is **tested and ruled out** (2026-11-03): all screens were aligned to
+  `y%4=0`, capture offsets verified to have followed, same videos replayed, and the lag remained.
+  Do not re-raise it as the cause. Do note *why* it once looked compelling — the `y%4` split matched
+  the user's 1-vs-2 report exactly — because a perfect correlation on the wrong variable is the
+  failure mode this section keeps hitting.
+- Do not call a hypothesis cleared unless the change was *verified to take effect* before retesting.
+  The first alignment refutation compared against a layout where every screen was already aligned (no
+  control group) and used capture fps, which does not track smoothness. That is not a test (see §13).
 - Do not clear a hypothesis using a metric already shown not to track the effect. Capture fps cannot
   rank perceived smoothness, so it cannot refute an alignment theory either.
 - Do not present re-enabling a browser's hardware acceleration as a stutter fix — measured **~2% of
