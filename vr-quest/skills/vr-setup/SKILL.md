@@ -803,6 +803,43 @@ same scroll speed, ideally same apparent size) on the smooth screen and on a jer
 side by side. If the judder follows the screen, it is per-stream (headset side). If both look alike,
 perception was the confound. Ask the user to run it — do not substitute a counter for their eyes.
 
+**Run the identical-content test across ALL screens at once, and mind the aspect-ratio trap**
+(2026-11-03). Launching the same file fullscreen on every virtual screen simultaneously removes
+content as a variable and simultaneously confirms placement, because the encoder **bitrate** on each
+screen jumps only if a window really landed there:
+
+```bash
+for n in 0 1 2; do
+  setsid nohup mpv --fs --fs-screen=$n --no-border --loop --mute "$VIDEO" >/tmp/mpv-$n.log 2>&1 </dev/null &
+done
+```
+
+Measured result (baseline → during, and capture before → during):
+
+| Screen | Bitrate | Capture fps |
+|---|---|---|
+| 1440x2560 portrait | 439k → **537k** | 49.5 → **48.7** |
+| 1280x720 | 42k → **806k** | 56.7 → **57.7** |
+| 2560x1080 ultrawide | 282k → **1728k** | 52.1 → **51.8** |
+
+**Capture fps moved <1 fps on every screen with real motion on all three** — the cap is structural,
+so this does settle that capture is not content-limited. It does **not** settle smoothness.
+
+Two traps that make this test misleading if unhandled:
+
+- **Aspect ratio defeats "identical content".** The same *landscape* video on a *portrait* screen
+  letterboxes into a horizontal strip, so it changes far less area — hence portrait 537k against the
+  ultrawide's 1728k from the same file. A portrait screen tested this way has the least changing
+  pixels of the three, which is the least fair setup for judging it. Either match apparent size, or
+  test with content whose shape matches the screen.
+- **Placement is the silent failure mode.** `--fs-screen=N` uses Mutter's monitor order, which need
+  not match Immersed's `ScreenID`. Verify with bitrate, not by assuming. `Capability access manager`
+  / GNOME's own screencast permission can also silently prevent a window from appearing.
+
+**Host state during three simultaneous videos**, for scale: `vcn_busy_percent` **47%**, 3D GPU
+**37%** — the media engine was **not** saturated by three 60 fps streams, so encoder saturation is not
+what limits this configuration. Two `plannotator` pollers were eating **103% CPU each** throughout.
+
 ### Separate stutter source: refresh-rate mismatch
 
 The Quest panel reports **90.00 Hz** while the stream is 60 fps
