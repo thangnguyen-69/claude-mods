@@ -872,6 +872,42 @@ Two traps that make this test misleading if unhandled:
 **37%** — the media engine was **not** saturated by three 60 fps streams, so encoder saturation is not
 what limits this configuration. Two `plannotator` pollers were eating **103% CPU each** throughout.
 
+### THE ACTUAL CAUSE OF PER-SCREEN JUDDER: only the stream at capture offset `(0,0)` is smooth
+
+Established 2026-11-03 by a slot swap on a three-screen setup. **This supersedes every size/rotation/alignment
+theory in this section** — each was tested and cleared before this one was found.
+
+Swap the *stream configurations* between `VDData` slots (stop Immersed first, byte-patch, relaunch, reconnect)
+and watch which screen judders:
+
+| Screen | before | after | user verdict |
+|---|---|---|---|
+| ultrawide 2560x1080 | `(1440, 1255)` laggy | **`(0, 0)`** | **smooth** |
+| portrait 1440x2560 | **`(0, 0)`** smooth | `(3840, 0)` | **laggy** |
+| 720p 1280x720 | `(1440, 535)` laggy | `(2560, 0)` | laggy (unchanged) |
+
+**Exactly one stream is smooth: the one capturing from `(0,0)`.** The screen that left the origin lost its
+smoothness, the one that entered it gained it, and the one that never touched it never changed. Judder
+tracks the *position*, not the panel, the resolution, the aspect ratio, the rotation, or the slot index.
+
+Consequences for how to diagnose this:
+
+- **Do not ask "which screen judders" — ask "is it the `(0,0)` stream".** That question predicted the
+  answer in every dataset collected here, including ones where size, alignment and rotation were all
+  controlled and gave the *wrong* answer.
+- Beware the trap this cost hours: before the swap the portrait was **both** the only rotated stream
+  **and** the only stream at `(0,0)`. A perfect correlation with the wrong variable again — the third time
+  in one session (see also capture fps and row alignment).
+- The `Capture -` offsets in `Screen Info` are the ground truth for which stream owns the origin. Mutter's
+  layout decides them, so changing slot order or `vr-layout` changes which stream is smooth.
+
+**Mechanism: NOT verified.** Plausible, unproven: Immersed captures `(0,0)` on a special path (whole
+framebuffer / first stream) while other streams do offset reads and per-row realignment; or the first
+stream gets a decoder/pipeline resource the others do not. Do not state a mechanism — state the observation.
+
+**What works today:** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
+For a layout with a tall portrait plus a wide screen, that means the portrait goes in slot 0.
+
 ### Separate stutter source: refresh-rate mismatch
 
 The Quest panel reports **90.00 Hz** while the stream is 60 fps
@@ -1077,6 +1113,12 @@ sudo perf report --stdio --sort symbol | head -40
   with the **lowest** mean capture (53.2) and **widest** jitter was the one the user reported as
   **smooth**, while the highest-capture screen felt uneven (see §13). Throughput and perception are
   separate questions, and no PC-side counter substitutes for the user's eyes.
+- **Only the stream at capture offset `(0,0)` is smooth** (measured 2026-11-03 by slot swap). Ask "is it
+  the origin stream", not "which screen". Only one stream can be smooth; put the screen you read on there.
+  Do not assert a mechanism — the observation is solid, the cause is not (see §13).
+- Do not confuse "the rotated stream judders" with a real result: before the swap the portrait was both the
+  only rotated stream and the only one at `(0,0)`. Rotation, resolution, aspect and row alignment were all
+  independently cleared.
 - Capture-row alignment is **tested and ruled out** (2026-11-03): all screens were aligned to
   `y%4=0`, capture offsets verified to have followed, same videos replayed, and the lag remained.
   Do not re-raise it as the cause. Do note *why* it once looked compelling — the `y%4` split matched
