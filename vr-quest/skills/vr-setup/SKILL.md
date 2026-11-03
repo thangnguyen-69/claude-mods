@@ -272,7 +272,22 @@ may become usable.
 
 The target layout comes from `~/.config/vr-layouts/desired.json` (a list of
 `{"connector","x","y","primary"}`) when present, else the built-in `DP-1` example; connector names
-differ per host (`vr-layout show` lists them). `vr-layout` snapshots live in `~/.config/vr-layouts/`. `restore` only accepts timestamped
+differ per host (`vr-layout show` lists them). **Only newer copies of the script read that file — check
+before trusting it.** The pre-2026-11-02 version ignores `desired.json` entirely (`DESIRED` hardcoded);
+with it, `vr-layout apply` silently applies the built-in portrait-left layout and **moves the primary**,
+which is the documented capture-corruption bug. Verify and refresh:
+
+```bash
+grep -c desired.json ~/.local/bin/vr-layout     # 0 = stale copy, do not run `apply`
+diff ~/.local/bin/vr-layout <SKILL_DIR>/scripts/vr-layout    # small diff = safe to reinstall
+install -Dm755 <SKILL_DIR>/scripts/vr-layout ~/.local/bin/vr-layout
+```
+
+This bit an operator on 2026-11-03: a hand-written `desired.json` was prepared for an alignment test
+and would have been ignored, applying the primary-moving layout instead. Check `vr-layout show` — it
+prints the `desired:` block it will actually use — **before** any `apply`.
+
+`vr-layout` snapshots live in `~/.config/vr-layouts/`. `restore` only accepts timestamped
 snapshots (`layout-YYYYmmdd-HHMMSS.json`); named layouts such as `layout-desired-*.json` are
 `apply only` and deliberately unreachable by `restore`, so the emergency command can never
 re-apply the layout you are escaping. Keep that restriction if you edit the script.
@@ -1004,5 +1019,8 @@ sudo perf report --stdio --sort symbol | head -40
   rank perceived smoothness, so it cannot refute an alignment theory either.
 - Do not present re-enabling a browser's hardware acceleration as a stutter fix — measured **~2% of
   one core** (13.9% vs 12.4%) playing the same video (see §13).
+- Do not assume `vr-layout` honours `desired.json` — pre-2026-11-02 copies ignore it and apply the
+  built-in layout that **moves the primary** (see §5). Run `vr-layout show` and read its `desired:`
+  block before any `apply`.
 - Weight the user's controlled A/B over any counter. "Smoother even when I only show half the screen"
   removes size and aspect confounds in a way no log field can.
