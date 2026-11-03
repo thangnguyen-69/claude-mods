@@ -754,7 +754,54 @@ limiter is the capture stage, not encoding, not transport, and not the headset.
 
 Fitting the three points gives roughly **15.5 ms of fixed cost per frame against a 16.67 ms
 budget**. Anything larger than ~1 MP misses the deadline and slips to the next slot; 720p squeaks
-through at 58.6. That is the whole mechanism.
+through at 58.6. That is the whole mechanism for *rate*.
+
+### SECTION: `capture fps` does NOT predict which screen FEELS smooth
+
+**This is the most important caveat in this section, and it was learned the hard way** (2026-11-03,
+after the pixel model above had already been written up and presented).
+
+The user reported the **tall 1440x2560 portrait screen as the smooth one** and the
+**1280x720 + 2560x1080 screens as uneven** — the exact inverse of what the capture-rate model
+predicts. Over 94 `Screen Info` blocks in one session:
+
+| Screen | mean capture | spread (max-min) |
+|---|---|---|
+| 1440x2560 portrait | **53.2** (lowest) | **10.5** (widest) |
+| 2560x1080 ultrawide | 55.4 | 7.0 |
+| 1280x720 | **58.9** (highest) | 2.9 (tightest) |
+
+So the metric that "proves" the capture stage limits throughput does **not** rank screens by
+perceived smoothness. Treat them as two different questions:
+
+- **"Is the pipeline losing frames?"** → capture vs encode on one block. Valid.
+- **"Which screen looks jerky to the user?"** → capture fps is **not** the answer. Do not use it to
+  rank screens, and do not tell a user their smooth screen should look bad.
+
+Ruled out while chasing this:
+
+- **Capture-rectangle alignment.** The two "uneven" screens alone sat at odd offsets (`y=535`,
+  `y=1255`; the smooth one at `(0,0)`), suggesting an unaligned NV12 path. **Refuted** — in the
+  earlier all-`y=0` tidy-row period the same screen read 54.8 vs 55.4 with the odd offset. No effect.
+  (Still worth avoiding odd offsets on principle, but it is not this bug.)
+- **Follow mode / anchoring.** All screens log `follow mode ... False`; nothing is head-locked.
+- **Content demand.** The smooth portrait carried by far the *most* motion (2541 kbps vs 79 and
+  282) — again the inverse of a "bigger draw = worse" reading.
+
+Leading hypotheses, **unproven** — do not state either as fact:
+
+1. **Perceptual / rendering, not the stream.** ~55 fps on a large canvas with smooth continuous
+   motion (a scrolling document) hides judder; a mostly static desktop where only a cursor moves
+   makes every late frame obvious. A smooth pan can also *mask* 3:2 pulldown.
+2. **A per-stream decoder asymmetry on the headset** — one stream in software, two in hardware.
+   This would explain a clean 1-vs-2 split, but there is **no positive evidence**: the Quest
+   `debug.log` only records *faults*, so it is silent when healthy and exposes no per-screen frame
+   stats. The app is not debuggable, so this cannot be read out from the PC.
+
+**The experiment that settles it is visual, not log-based.** Put the *same* content (same window,
+same scroll speed, ideally same apparent size) on the smooth screen and on a jerky one and compare
+side by side. If the judder follows the screen, it is per-stream (headset side). If both look alike,
+perception was the confound. Ask the user to run it — do not substitute a counter for their eyes.
 
 ### Separate stutter source: refresh-rate mismatch
 
@@ -808,8 +855,23 @@ simultaneous streams, not a PC-side change.
   until gnome-shell is restarted (a full logout/login on Wayland — `Alt+F2 r` does not reload).
 - **A browser running with hardware acceleration disabled** burns CPU in the same window as the
   capture. Check `hardware_acceleration_mode.enabled` in `Local State` and whether the GPU process
-  carries `--use-gl=disabled` / `--disable-gpu`. Software video decode competing with capture is
-  self-inflicted and cheap to fix.
+  carries `--use-gl=disabled`. Software video decode competing with capture is self-inflicted and
+  cheap to fix.
+  **But measure it before recommending it — it is a small effect, not a stutter fix.** Verified on a
+  780M by running three throwaway profiles (`--user-data-dir=/tmp/...`, never the user's live
+  profile) and playing the same local file for a 12 s steady-state window: software decode
+  **13.9%**, stock **14.7%**, `--enable-features=VaapiVideoDecoder` **12.4%** CPU — i.e. **~2% of one
+  core**. Worth turning on; will not change judder. Check the real capability rather than assuming:
+  `SystemInfo.getInfo` over CDP on a fresh profile reported
+  `ANGLE (AMD, AMD Radeon 780M Graphics (radeonsi phoenix), OpenGL ES 3.2 Mesa ...)` with
+  `video_decoding` enabled at up to **4096x4096**. `hardware_acceleration_mode.enabled=false` in a
+  profile is a **user-visible Chrome setting** (Settings → System → "Use graphics acceleration when
+  available"), not a broken driver — do not go driver-hunting.
+  **Flag-reading trap:** `--disable-gpu` and `--disable-gpu-compositing` do not share a prefix
+  boundary for a naive `grep -c -- '--disable-gpu'`. Counting that way reported "30x `--disable-gpu`"
+  when the truth was **2** real ones plus **27** `--disable-gpu-compositing`. Both are Chrome's
+  *downstream* consequence of acceleration being off, not the cause. Split on whitespace and use
+  `grep -x` before quoting a flag count.
 
 ### Profiling honestly
 
@@ -873,3 +935,11 @@ sudo perf report --stdio --sort symbol | head -40
 - Do not imply you profiled with `perf`/`bpftrace` unless you actually ran them. With
   `perf_event_paranoid > 1` and no root they refuse to sample userspace — say so and use the
   counters in §13 instead.
+- Do not use `Capture ... @ N FPS` to rank screens by *perceived* smoothness. Measured: the screen
+  with the **lowest** mean capture (53.2) and **widest** jitter was the one the user reported as
+  **smooth**, while the highest-capture screen felt uneven (see §13). Throughput and perception are
+  separate questions, and no PC-side counter substitutes for the user's eyes.
+- Do not claim a capture-offset alignment bug without testing against an aligned layout. Odd `y`
+  offsets were a plausible cause of the above and were **refuted** by the all-`y=0` period.
+- Do not present re-enabling a browser's hardware acceleration as a stutter fix — measured **~2% of
+  one core** (13.9% vs 12.4%) playing the same video (see §13).
