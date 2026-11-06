@@ -36,11 +36,20 @@ unavoidable. Read it before touching `vr-layout`.
 ## Install the helper scripts first
 
 The scripts live in `scripts/` next to this file. Copy the ones for your stack onto `PATH`.
-Look before overwriting: if a same-named script already exists in `~/.local/bin`, diff it first.
+**Look before overwriting: if a same-named script already exists in `~/.local/bin`, diff it first.**
+The local copy is often hand-patched for a host — a fixed AppImage path, a different auth handling —
+and a blind `install -Dm755` silently reverts it. That happened here: a locally patched `vr-immersed`
+was overwritten with the shipped copy, which searched only `~/Applications` and failed with
+`Immersed AppImage not found` even though the AppImage was installed per §1. When you find a local
+edit, fold it into the script here rather than re-patching the installed copy.
 
 ```bash
 SKILL_DIR="<this skill's base directory>"     # the folder containing this SKILL.md
-# Immersed
+for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch; do
+  [ -f ~/.local/bin/$f ] && ! cmp -s "$SKILL_DIR/scripts/$f" ~/.local/bin/$f && \
+    { echo "== $f differs — review before overwriting =="; diff -u ~/.local/bin/$f "$SKILL_DIR/scripts/$f" | head -40; }
+done
+# then install
 for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
 # WiVRn + WayVR
 for f in wayvr vr-start vr-reconnect vr-ready vr-workspace vr-term alacritty-vr spotify-vr chrome-vr vr-fix vr-hand-bindings; do
@@ -187,9 +196,9 @@ the screen back on; `--keep-screen` skips the backlight. `vr-immersed --link hom
 the linked profile automatically and leaves the setup alone on unlinked networks. `--list` shows
 profiles and links. VR screen
 positions live on the headset and window-to-monitor placement can't be scripted on GNOME Wayland,
-so neither is part of a profile. It finds the newest
-`~/Applications/Immersed*.AppImage` — AppImageLauncher may have moved/renamed the file there
-(e.g. `Immersed-x86_64_<hash>.AppImage`).
+so neither is part of a profile. It finds the newest AppImage among the places it actually lands —
+`~/.local/opt/immersed/` (where §1 installs it), `~/Applications/` (AppImageLauncher may move/rename
+it there, e.g. `Immersed-x86_64_<hash>.AppImage`), and `~/Downloads/`.
 
 Launch detached so it survives the shell:
 

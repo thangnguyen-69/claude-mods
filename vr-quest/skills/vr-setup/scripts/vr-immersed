@@ -212,8 +212,29 @@ case "${1:-}" in
   *) if profile_active "$1"; then echo "Profile '$1' already active."; else apply_profile "$1"; fi ;;
 esac
 
-app=$(ls -t "$HOME"/Applications/Immersed*.AppImage "$HOME"/Applications/Immersed/*.AppImage 2>/dev/null | head -1)
-[ -n "$app" ] || { echo "Immersed AppImage not found in ~/Applications" >&2; exit 1; }
+# Search every place the AppImage actually ends up, newest first. The install procedure in
+# SKILL.md puts it at ~/.local/opt/immersed (that is also the path its .desktop file hardcodes),
+# so searching ONLY ~/Applications — as this script used to — fails on a stock install and forces
+# a local hand-patch of the script. AppImageLauncher may instead move/rename it into
+# ~/Applications as Immersed-x86_64_<hash>.AppImage, and integrations that keep it in place leave
+# a copy in Downloads, so accept those too.
+find_app() {
+  local c
+  for c in "$HOME/.local/opt/immersed"/Immersed*.AppImage \
+           "$HOME/Applications"/Immersed*.AppImage \
+           "$HOME/Applications/Immersed"/Immersed*.AppImage \
+           "$HOME/Downloads"/Immersed*.AppImage; do
+    [ -f "$c" ] && printf '%s\n' "$c"
+  done | sort -u | while IFS= read -r f; do printf '%s\t%s\n' "$(stat -c %Y "$f")" "$f"; done \
+       | sort -rn | head -1 | cut -f2-
+}
+app=$(find_app)
+if [ -z "$app" ]; then
+  echo "Immersed AppImage not found. Looked in:" >&2
+  echo "  ~/.local/opt/immersed/  ~/Applications/  ~/Downloads/" >&2
+  echo "Install it per SKILL.md section 1, or set the path in this script." >&2
+  exit 1
+fi
 
 # The agent needs working X11 auth even though its display path is Wayland, and a stale
 # XAUTHORITY fails it instantly: "Authorization required, but no authorization protocol
