@@ -255,6 +255,7 @@ def watch(name, persist):
     import fcntl
     import subprocess
     import time
+    sys.stdout.reconfigure(line_buffering=True)   # log goes to a file
     lock = open(os.path.join(STORE, f".watch-{os.uname().nodename}.lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
