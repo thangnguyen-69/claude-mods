@@ -185,6 +185,36 @@ def apply_layout(spec, persist):
         print("       (applying it would switch them off; save a layout for this profile)")
         return False
 
+    # No-op guard: if the requested layout already equals Mutter's, do NOT call
+    # ApplyMonitorsConfig. Applying a layout under a live Immersed session is the
+    # documented capture-offset corruption path, so an already-correct layout must be
+    # left strictly alone. Compare only the fields we would set.
+    current = {l["connector"]: l for l in state["layout"]}
+    if len(current) == len(spec):
+        diffs = []
+        for s in spec:
+            cur = current.get(s["connector"])
+            if cur is None:
+                diffs.append(f"{s['connector']}: absent from current layout")
+                continue
+            if cur["x"] != s["x"]:
+                diffs.append(f"{s['connector']}: x {cur['x']} -> {s['x']}")
+            if cur["y"] != s["y"]:
+                diffs.append(f"{s['connector']}: y {cur['y']} -> {s['y']}")
+            if cur["primary"] != bool(s.get("primary", False)):
+                diffs.append(
+                    f"{s['connector']}: primary {cur['primary']} -> {bool(s.get('primary', False))}")
+        if not diffs:
+            print("ALREADY MATCHES current Mutter layout — nothing to apply.")
+            print("(no ApplyMonitorsConfig sent; this is the safe no-op path)")
+            show(state, "CURRENT")
+            return True
+        print("layout differs from current:")
+        for d in diffs:
+            print(f"  {d}")
+    else:
+        print(f"note: spec has {len(spec)} connector(s), Mutter reports {len(current)}")
+
     logical = []
     for s in spec:
         conn = s["connector"]

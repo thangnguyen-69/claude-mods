@@ -939,13 +939,30 @@ like display lag. Check `power1_average`, swap growth and top CPU consumers **be
 **A stale `XAUTHORITY` stops Immersed from launching at all.** The agent needs working X11 auth even
 though its display path is Wayland. Launching from a shell whose `XAUTHORITY` predates the current
 XWayland fails instantly with `Authorization required, but no authorization protocol specified`.
-Read the live path from the running server and use it:
+`vr-immersed` now derives the auth path from the live Xwayland itself and only falls back to the
+inherited `XAUTHORITY`, so it is immune to this — but if you launch the AppImage by hand, read the
+live path from the running server:
 
 ```bash
 pgrep -af Xwayland            # note the -auth path in the command line
 XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.XXXXXX \
   setsid nohup ~/.local/opt/immersed/Immersed-x86_64.AppImage >/tmp/immersed-launch.log 2>&1 </dev/null &
 ```
+
+**This is the expected state after a session crash (observed 2026-11-07 00:20).** A shell that
+outlived the crashed session kept `XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.PIW0X3` while the
+new Xwayland used `.../.mutter-Xwaylandauth.7ZY8X3` — same uid, different file. The launch died in
+under a second and left a **9-line** log ending at `Encoder Factory`; the real cause was only in
+`~/.local/state/immersed-launch.log`, never in `~/.Immersed/Logs/`. When a launch produces a tiny log
+and no process, read the launch log **first** — and note the log dir keeps the old files, so pick it by
+mtime, not by "newest-looking name".
+
+**That failure is a different segfault from the session-crash one, and it is harmless.** The auth
+failure produces `Immersed[PID]: segfault at e0 ... in Immersed[4c5fe8,...]` — the same address as the
+2026-11-02 crash. On 2026-11-07 00:20 it killed only the agent: **no** virtual monitor was live, the
+session was untouched (`GNOME Shell crashed` count 0) and gnome-shell kept its pid. So a segfault in
+this app is *not* by itself evidence of the session-crash path; check whether `Meta-*` monitors were
+up, then whether `Removed virtual monitor` follows.
 
 **Filter by uid — `pgrep -af Xwayland` can match the GDM greeter's server.** After a session crash the
 greeter keeps an Xwayland of its own under `/run/user/120/` (or another gdm uid). Grabbing "the first

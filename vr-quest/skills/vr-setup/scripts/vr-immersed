@@ -214,10 +214,43 @@ esac
 
 app=$(ls -t "$HOME"/Applications/Immersed*.AppImage "$HOME"/Applications/Immersed/*.AppImage 2>/dev/null | head -1)
 [ -n "$app" ] || { echo "Immersed AppImage not found in ~/Applications" >&2; exit 1; }
+
+# The agent needs working X11 auth even though its display path is Wayland, and a stale
+# XAUTHORITY fails it instantly: "Authorization required, but no authorization protocol
+# specified" in the launch log, process gone in under a second. That is easy to inherit —
+# a shell that outlives a session crash (or was started from the pre-crash session) keeps
+# the OLD .mutter-Xwaylandauth.* path while the new Xwayland uses a different one. So
+# derive it from the live Xwayland for THIS uid; never trust the inherited value.
+resolve_xauthority() {
+  local uid live
+  uid=$(id -u)
+  live=$(pgrep -af Xwayland 2>/dev/null | grep "/run/user/$uid/" \
+         | grep -oE '\-auth [^ ]+' | awk '{print $2}' | head -1)
+  if [ -n "$live" ] && [ -r "$live" ]; then printf '%s' "$live"
+  elif [ -n "${XAUTHORITY:-}" ] && [ -r "$XAUTHORITY" ]; then printf '%s' "$XAUTHORITY"
+  fi
+}
+
 if pgrep -x Immersed >/dev/null; then
   echo "Immersed agent already running."
 else
-  setsid nohup "$app" > "$HOME/.local/state/immersed-launch.log" 2>&1 < /dev/null &
+  xa=$(resolve_xauthority)
+  if [ -n "$xa" ]; then
+    XAUTHORITY="$xa" setsid nohup "$app" > "$HOME/.local/state/immersed-launch.log" 2>&1 < /dev/null &
+  else
+    setsid nohup "$app" > "$HOME/.local/state/immersed-launch.log" 2>&1 < /dev/null &
+  fi
+  # A launch that dies immediately is almost always the auth trap, not a missing display.
+  # Check rather than printing "Started" for a process that is already gone.
+  sleep 3
+  if ! pgrep -x Immersed >/dev/null; then
+    echo "Immersed failed to start." >&2
+    tail -3 "$HOME/.local/state/immersed-launch.log" 2>/dev/null >&2
+    if grep -qi "Authorization required" "$HOME/.local/state/immersed-launch.log" 2>/dev/null; then
+      echo "  ^ stale XAUTHORITY. Live Xwayland asks for: $(pgrep -af Xwayland | grep -oE '\-auth [^ ]+' | head -1)" >&2
+    fi
+    exit 1
+  fi
   echo "Started Immersed agent: $app"
 fi
 if adb get-state >/dev/null 2>&1; then
