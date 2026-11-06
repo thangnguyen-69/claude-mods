@@ -191,24 +191,35 @@ headset, and opens Immersed there over adb; the user then presses **Connect**.
 values into `~/.ImmersedConf` (backup first), and starts it — or skips the restart when that
 profile is already active. Starting also turns the laptop **backlight** off (panel keeps running, so it still shows in VR;
 saved brightness is never 0); `vr-immersed --stop` quits the agent and the headset app and turns
-the screen back on; `--keep-screen` skips the backlight. `vr-immersed --link home` ties the current Wi-Fi SSID to the profile
-(`~/.config/vr-layouts/immersed/places`, `SSID=profile` lines); plain `vr-immersed` then picks
-the linked profile automatically and leaves the setup alone on unlinked networks. `--list` shows
-profiles and links.
+the screen back on; `--keep-screen` skips the backlight. `vr-immersed --link home` ties the current Wi-Fi SSID to the profile;
+plain `vr-immersed` then picks the linked profile automatically. `--list` shows profiles and links.
 
-**Known gap: auto-selection is Wi-Fi-only, so it silently does nothing off Wi-Fi.** Measured
-2026-11-07: `profile_for_ssid` returns empty for both an **Ethernet** connection (`current_ssid` is
-blank) and any **unlinked SSID**, so `vr-immersed` starts the agent with whatever `~/.ImmersedConf`
-happens to hold rather than applying a profile. That is safe-but-unpredictable, not broken — the
-conf is what the last `--save`/apply left behind. Worth knowing when VDData looks stale after
-switching networks.
+**Auto-selection is by Wi-Fi, then by machine.** Most specific rule first:
 
-- **Layouts are already per machine** (`~/.config/vr-layouts/hosts/<hostname>/…`), because connector
-  names and panel sizes differ per PC. **Profiles are not** — they live in a single global
-  `~/.config/vr-layouts/immersed/profiles/`. That is fine on a one-`$HOME`-per-box setup, but it is
-  the inconsistent half: if `~/.local/share` is ever network-shared, or a `$HOME` is adopted from
-  another machine, the wrong VDData can be applied with no warning. A hostname fallback
-  (`hosts/<host>/places` → machine default profile) would close it without touching Wi-Fi links.
+| # | Rule | File |
+|---|---|---|
+| 1 | the current SSID, as linked **on this machine** | `~/.config/vr-layouts/hosts/<hostname>/places` |
+| 2 | the current SSID, linked for **all machines** | `~/.config/vr-layouts/immersed/places` |
+| 3 | this machine's default (`HOST=<profile>`) | `~/.config/vr-layouts/hosts/<hostname>/places` |
+| 4 | nothing — the agent starts with whatever `~/.ImmersedConf` holds | — |
+
+Rule 3 is what makes **Ethernet and unlinked networks** work; without it they silently applied no
+profile (measured 2026-11-07: `--link` alone left both cases empty). Wi-Fi stays the more specific
+rule, so one machine can still behave differently per network — that is what rule 1 is for.
+
+```bash
+vr-immersed --link-host home    # this machine -> home, used when no Wi-Fi link matches
+vr-immersed --link home         # this SSID on this machine -> home (overrides rule 3)
+vr-immersed --list              # profiles, this machine's links, shared links, and the order
+```
+
+SSID keys are matched **exactly**, so a network called `Home` does not match a `Home 2` line.
+When no rule matches, `vr-immersed` now says so instead of exiting silently.
+
+- **Profiles stay global** (`~/.config/vr-layouts/immersed/profiles/`), unlike layouts, which are
+  per machine (`~/.config/vr-layouts/hosts/<hostname>/…`) because connector names and panel sizes
+  differ per PC. If `$HOME` is ever network-shared or adopted from another machine, give each machine
+  its own `HOST=` line (and per-host SSID links) rather than assuming the profiles are isolated.
 
 VR screen
 positions live on the headset and window-to-monitor placement can't be scripted on GNOME Wayland,

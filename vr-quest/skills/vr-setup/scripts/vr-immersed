@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Start the Immersed agent (if needed) and open Immersed on the Quest over USB.
 #
-#   vr-immersed               use the profile linked to the current Wi-Fi (if any), then start
+#   vr-immersed               use the profile for this Wi-Fi (or this machine), then start
 #   vr-immersed home          apply the "home" profile first, then start
 #   vr-immersed --save home   save the current screen setup as "home"
 #   vr-immersed --link home   link the current Wi-Fi network to the "home" profile
-#   vr-immersed --list        list saved profiles and Wi-Fi links
+#   vr-immersed --link-host home
+#                             link THIS MACHINE to the "home" profile (used when the
+#                             Wi-Fi has no link, e.g. on Ethernet)
+#   vr-immersed --list        list saved profiles, Wi-Fi links and machine links
 #   vr-immersed --stop        quit Immersed (laptop + headset) and turn the laptop screen back on
 #   (plain `vr-immersed` also restarts a running agent that has lost zero-copy)
 #   vr-immersed --restart     fresh agent process: the fix for a frozen/juddering screen
@@ -31,10 +34,21 @@
 # capture FPS caps (FPS / FPSFor2 / FPSFor4) and EnableAudio from ~/.ImmersedConf. Where screens float in VR is stored by the headset, not here.
 # Immersed rewrites ~/.ImmersedConf when it exits, so applying a profile stops
 # the agent first (the headset has to press Connect again).
+#
+# Which profile is picked automatically, most specific first:
+#   1. the current Wi-Fi SSID in  hosts/<hostname>/places   (this machine's own link)
+#   2. the current Wi-Fi SSID in  immersed/places           (link shared by every machine)
+#   3. this machine's default     hosts/<hostname>/places   (the HOST= line)
+#   4. nothing -- the agent starts with whatever ~/.ImmersedConf holds.
+# Rule 3 is what makes Ethernet and unlinked networks work; Wi-Fi stays the more
+# specific rule so a machine can behave differently per network.
 set -u
 CONF="$HOME/.ImmersedConf"
+HOST=$(uname -n)
 PROFILES="$HOME/.config/vr-layouts/immersed/profiles"
-PLACES="$HOME/.config/vr-layouts/immersed/places"   # lines: <Wi-Fi SSID>=<profile>
+PLACES="$HOME/.config/vr-layouts/immersed/places"          # lines: <Wi-Fi SSID>=<profile>
+HOST_DIR="$HOME/.config/vr-layouts/hosts/$HOST"
+HOST_PLACES="$HOST_DIR/places"                             # same format, plus HOST=<profile>
 BL_SAVED="$HOME/.config/vr-layouts/immersed/backlight-before"
 
 # Backlight via logind: no root needed for the active session.
@@ -70,12 +84,35 @@ zero_copy_lost() {
 
 current_ssid() { nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1; }
 
-profile_for_ssid() {
-  local ssid=$1
-  [ -n "$ssid" ] && [ -f "$PLACES" ] || return 0
-  grep -F -- "$ssid=" "$PLACES" | while IFS= read -r line; do
-    [ "${line%=*}" = "$ssid" ] && { echo "${line##*=}"; break; }
-  done
+# Print the profile named by "<key>=<profile>" in file $1. Exact key match: a naive
+# grep for "$ssid=" would let "Home" match "Home 2=..." and vice versa, so compare the
+# key half of each line instead.
+profile_for_key() {
+  local key=$1 file=$2
+  [ -n "$key" ] && [ -f "$file" ] || return 0
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    [ "${line%%=*}" = "$key" ] && { printf '%s' "${line#*=}"; return 0; }
+  done < "$file"
+}
+
+profile_for_ssid() { profile_for_key "$1" "${2:-$PLACES}"; }
+
+# This machine's default profile: the HOST= line in its own places file.
+profile_for_host() { profile_for_key HOST "$HOST_PLACES"; }
+
+# Resolve the profile to apply from the environment, most specific rule first.
+# Prints nothing when no rule matches, which is the documented "leave it alone" case.
+auto_profile() {
+  local ssid p
+  ssid=$(current_ssid)
+  # 1. this machine's Wi-Fi link -- lets one machine differ per network
+  p=$(profile_for_ssid "$ssid" "$HOST_PLACES"); [ -n "$p" ] && { printf '%s' "$p"; return 0; }
+  # 2. the shared Wi-Fi link (pre-host-keying installs keep their links here)
+  p=$(profile_for_ssid "$ssid" "$PLACES");       [ -n "$p" ] && { printf '%s' "$p"; return 0; }
+  # 3. this machine's default -- the case that makes Ethernet work
+  profile_for_host
 }
 
 # True when ~/.ImmersedConf already holds the profile's screens and bitrate.
@@ -99,15 +136,33 @@ current_profile() {
   done
 }
 
+# Set "<key>=<profile>" in file $2, replacing any existing line with that key. Rewrites
+# via a temp file so a failed write cannot truncate the place list.
+set_place() {
+  local key=$1 name=$2 file=$3
+  mkdir -p "${file%/*}"; touch "$file"
+  grep -v -F -x -e "$key=$(profile_for_key "$key" "$file")" "$file" > "$file.tmp" 2>/dev/null || true
+  printf '%s=%s\n' "$key" "$name" >> "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
 link_place() {
   local name=$1 ssid
   ssid=$(current_ssid)
-  [ -n "$ssid" ] || { echo "Not on Wi-Fi; nothing to link." >&2; exit 1; }
+  [ -n "$ssid" ] || { echo "Not on Wi-Fi; nothing to link. Use --link-host $name for a machine-wide link." >&2; exit 1; }
   [ -f "$PROFILES/$name.profile" ] || { echo "No profile '$name' (save it first with --save $name)." >&2; exit 1; }
-  mkdir -p "${PLACES%/*}"; touch "$PLACES"
-  grep -v -F -x -e "$ssid=$(profile_for_ssid "$ssid")" "$PLACES" > "$PLACES.tmp" || true
-  echo "$ssid=$name" >> "$PLACES.tmp"; mv "$PLACES.tmp" "$PLACES"
-  echo "Wi-Fi '$ssid' -> profile '$name'"
+  set_place "$ssid" "$name" "$HOST_PLACES"
+  echo "Wi-Fi '$ssid' on $HOST -> profile '$name'"
+  echo "  ($HOST_PLACES)"
+}
+
+link_host() {
+  local name=$1
+  [ -n "$name" ] || { echo "usage: vr-immersed --link-host NAME" >&2; exit 2; }
+  [ -f "$PROFILES/$name.profile" ] || { echo "No profile '$name' (save it first with --save $name)." >&2; exit 1; }
+  set_place HOST "$name" "$HOST_PLACES"
+  echo "Machine '$HOST' -> profile '$name' (used when no Wi-Fi link matches)"
+  echo "  ($HOST_PLACES)"
 }
 
 save_profile() {
@@ -188,25 +243,47 @@ case "${1:-}" in
     screen_on; exit 0 ;;
   --save) [ -n "${2:-}" ] || { echo "usage: vr-immersed --save NAME" >&2; exit 2; }; save_profile "$2"; exit 0 ;;
   --link) [ -n "${2:-}" ] || { echo "usage: vr-immersed --link NAME" >&2; exit 2; }; link_place "$2"; exit 0 ;;
-  --list) echo "Profiles:"; ls "$PROFILES" 2>/dev/null | sed -n 's/\.profile$//p' | sed 's/^/  /'
-          echo "Wi-Fi links:"; sed 's/^/  /' "$PLACES" 2>/dev/null; exit 0 ;;
+  --link-host) link_host "${2:-}"
+               exit $? ;;
+  --list)
+    echo "Profiles:"; ls "$PROFILES" 2>/dev/null | sed -n 's/\.profile$//p' | sed 's/^/  /'
+    echo "Machine links ($HOST):"
+    if [ -s "$HOST_PLACES" ]; then sed 's/^/  /' "$HOST_PLACES"; else echo "  (none — $HOST_PLACES)"; fi
+    echo "Wi-Fi links (all machines):"
+    if [ -s "$PLACES" ]; then sed 's/^/  /' "$PLACES"; else echo "  (none)"; fi
+    echo "Order: $HOST's SSID link -> shared SSID link -> HOST= line -> no profile."
+    exit 0 ;;
   --restart)
     if pgrep -x Immersed >/dev/null; then
       pkill -x Immersed
       for _ in $(seq 1 20); do pgrep -x Immersed >/dev/null || break; sleep 0.5; done
       echo "Immersed agent stopped; starting a fresh one."
     fi ;;
-  -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
   "")
     if zero_copy_lost; then
       echo "Running Immersed has lost zero-copy (screens judder/freeze); restarting it fresh..."
       pkill -x Immersed
       for _ in $(seq 1 20); do pgrep -x Immersed >/dev/null || break; sleep 0.5; done
     fi
-    ssid=$(current_ssid); auto=$(profile_for_ssid "$ssid")
+    ssid=$(current_ssid); auto=$(auto_profile)
     if [ -n "$auto" ]; then
-      if profile_active "$auto"; then echo "Wi-Fi '$ssid': profile '$auto' already active."
-      else echo "Wi-Fi '$ssid': using profile '$auto'."; apply_profile "$auto"; fi
+      # Name the rule that won: on Ethernet "Wi-Fi '': ..." is nonsense, and when a
+      # HOST= fallback fires the operator needs to know Wi-Fi had nothing.
+      if [ "$(profile_for_ssid "$ssid" "$HOST_PLACES")" = "$auto" ]; then
+        rule="Wi-Fi '$ssid' ($HOST)"
+      elif [ "$(profile_for_ssid "$ssid" "$PLACES")" = "$auto" ]; then
+        rule="Wi-Fi '$ssid' (shared)"
+      else
+        rule="machine $HOST"
+      fi
+      if profile_active "$auto"; then echo "$rule: profile '$auto' already active."
+      else echo "$rule: using profile '$auto'."; apply_profile "$auto"; fi
+    elif [ -n "$ssid" ]; then
+      echo "Wi-Fi '$ssid' and machine '$HOST' have no profile link; leaving the config alone."
+    else
+      echo "No Wi-Fi link and no machine link for '$HOST'; leaving the config alone."
+      echo "  (fix once with: vr-immersed --link-host $(current_profile || echo NAME))"
     fi ;;
   -*) echo "unknown option $1" >&2; exit 2 ;;
   *) if profile_active "$1"; then echo "Profile '$1' already active."; else apply_profile "$1"; fi ;;

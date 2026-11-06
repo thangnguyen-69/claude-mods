@@ -30,7 +30,7 @@ vr-quest/
     wivrn-wayvr.md      # the WiVRn + WayVR procedure and traps
     scripts/
       vr-stats          # one-shot health check: CPU, GPU, memory (+ Immersed leak trend), temps, network, stream fps/latency
-      vr-immersed       # Immersed: start + open on the Quest; per-place profiles (auto by Wi-Fi)
+      vr-immersed       # Immersed: start + open on the Quest; profiles auto-picked by Wi-Fi, then by machine name
       vr-layout         # Immersed: per-machine/per-profile Mutter layout; save / apply / watch (apply is pre-connect only — see SKILL.md "THE RULE")
       vr-diag           # Immersed: one-shot diagnostic snapshot (+ --compare)
       vr-diag-watch     # Immersed: background sampler; `hang` = immediate capture
