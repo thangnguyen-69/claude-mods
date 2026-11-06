@@ -1075,11 +1075,17 @@ has no logical monitor to return *because* the monitors are already gone.
 - **Practical consequence:** any Immersed death while streaming — crash, `pkill`, a config rewrite
   that restarts it — can take the session wholesale. That is the existing warning below, now with a
   concrete mechanism and a repeat rate.
-- **Mitigation is not established.** Disabling Tiling Assistant is the obvious experiment (it is the
-  frame that calls into the failing assertion) but has **not been tested**; do not present it as a fix.
-  Note it is stock Ubuntu (`gnome-shell-extension-ubuntu-tiling-assistant`), not something added here,
-  and that this skill *recommends* it for VR tiling (see the tiling note in the memory/docs), so
-  removing it has its own cost.
+- **Closing applications first is a real mitigation — measured 2026-11-07 01:01.** With the desktop
+  emptied and both `Meta-*` monitors live, a forced `vr-immersed --restart` removed them
+  (`Removed virtual monitor Meta-0` / `Meta-1`) with **no crash**: no segfault, no `GNOME Shell
+  crashed`, same gnome-shell pid. Compare the two earlier occurrences, which aborted on a busy
+  desktop. So teardown alone is not sufficient — **open windows are what trip the assertion**, very
+  likely via Tiling Assistant's window→work-area lookups. Recommend closing apps before any restart
+  with virtual monitors live; that is more than data-loss hygiene.
+- **Disabling Tiling Assistant remains untested.** It is the frame calling into the failing assertion,
+  but do not present removal as a fix. Note it is stock Ubuntu
+  (`gnome-shell-extension-ubuntu-tiling-assistant`), not something added here, and that this skill
+  *recommends* it for VR tiling, so removing it has its own cost.
 - **This is a third distinct crash signature from `meta_monitor_mode_foreach_crtc` ←
   `sync_cursor_state`** described above. Both produce signal 6; check the stack frame before assuming
   which one you hit.
