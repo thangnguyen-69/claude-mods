@@ -31,7 +31,7 @@ vr-quest/
     scripts/
       vr-stats          # one-shot health check: CPU, GPU, memory (+ Immersed leak trend), temps, network, stream fps/latency
       vr-immersed       # Immersed: start + open on the Quest; per-place profiles (auto by Wi-Fi)
-      vr-layout         # Immersed: per-machine/per-profile Mutter layout; save / apply / watch (re-apply on Connect)
+      vr-layout         # Immersed: per-machine/per-profile Mutter layout; save / apply / watch (apply is pre-connect only — see SKILL.md "THE RULE")
       vr-diag           # Immersed: one-shot diagnostic snapshot (+ --compare)
       vr-diag-watch     # Immersed: background sampler; `hang` = immediate capture
       wayvr             # WayVR wrapper: libopenvr path + newest standalone binary
@@ -77,11 +77,19 @@ WiVRn + WayVR:
 
 Immersed:
 
-1. **Never move the primary display off x=0.** Doing so corrupts Immersed's capture offsets and
+1. **Zero stutter means zero-copy, and that costs you a custom layout.** If Mutter hands Immersed
+   DMA-BUF buffers, every screen is smooth. Any mid-session layout change (a live
+   `ApplyMonitorsConfig`, the layout watcher, GNOME Settings → Displays, a headset-side origin
+   change) renegotiates PipeWire and drops Immersed to RAM copies for the life of the process — and
+   then only the `(0,0)` screen is smooth. So: keep Mutter's default packing, arrange in VR, fix a
+   regression with `vr-immersed --restart`, and check `vr-stats`' `zero-copy:` line before blaming
+   anything else. Some hosts (Ubuntu 24.04 / Mutter 46.2 / AMD 780M) never negotiate DMA-BUF at all,
+   in which case the `(0,0)` guidance is still the best available.
+2. **Never move the primary display off x=0.** Doing so corrupts Immersed's capture offsets and
    the primary screen's VR stream freezes while other screens keep working. Negative positions are
    rejected by Mutter, so put screens left of the laptop **in VR** (swap/drag) instead. Never script
    monitor off/on toggles while Immersed streams: it segfaulted gnome-shell once.
-2. **Bitrate is not a stall signal.** Tens of kbps is normal for an idle desktop. Compare
+3. **Bitrate is not a stall signal.** Tens of kbps is normal for an idle desktop. Compare
    `TotalFrame`/`TotalBytes` between two `Screen Info` blocks, and check the block timestamp is
    newer than the event.
 

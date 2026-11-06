@@ -1,6 +1,6 @@
 ---
 name: vr-setup
-description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, or the free open-source WiVRn + WayVR stack. Use when the user says /vr-setup, asks to install or configure Immersed, wants virtual displays, extra monitors, a portrait or ultra-wide/high VR screen, needs the monitors arranged or positioned, reports VR screens stuck/frozen/laggy, that a virtual display won't change resolution, that Immersed is not updating or needs a restart, that GNOME Displays shows monitors overlapping, or that a VR session died. Also use for WiVRn or WayVR: installing them, a Quest that will not connect over USB (adb unauthorized), WayVR showing black or nothing, hand tracking or the wrist watch not working, opening apps or a terminal inside VR, typing into VR apps with the physical keyboard (Super+Z), recentering, or avoiding a VR subscription. Also use when VR panels lose their positions or the user wants the screen layout remembered. Also use when WiVRn/WayVR wobbles or judders on a weak iGPU (switch to Immersed). Also use when the user asks how VR is performing or for resource usage during VR: CPU, GPU, memory, a suspected memory leak, temperature, battery, bandwidth, fps, latency or packet loss (run vr-stats first). Also covers the scripts vr-stats, vr-immersed, vr-layout, vr-diag, vr-diag-watch, vr-start, vr-reconnect, vr-ready, vr-workspace, vr-term, spotify-vr, chrome-vr, vr-fix and vr-hand-bindings."
+description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, or the free open-source WiVRn + WayVR stack. Use when the user says /vr-setup, asks to install or configure Immersed, wants virtual displays, extra monitors, a portrait or ultra-wide/high VR screen, needs the monitors arranged or positioned, reports VR screens stuck/frozen/laggy/stuttery/juddery, that only one screen is smooth, that a virtual display won't change resolution, that Immersed is not updating or needs a restart, that GNOME Displays shows monitors overlapping, or that a VR session died. Also use when the user wants custom Linux-side monitor arrangement: the skill's central rule is that zero stutter requires keeping Mutter's default layout and arranging screens in VR instead, because any mid-session layout change permanently drops Immersed to RAM copies (zero-copy lost) for the life of the process. Also use for WiVRn or WayVR: installing them, a Quest that will not connect over USB (adb unauthorized), WayVR showing black or nothing, hand tracking or the wrist watch not working, opening apps or a terminal inside VR, typing into VR apps with the physical keyboard (Super+Z), recentering, or avoiding a VR subscription. Also use when VR panels lose their positions or the user wants the screen layout remembered. Also use when WiVRn/WayVR wobbles or judders on a weak iGPU (switch to Immersed). Also use when the user asks how VR is performing or for resource usage during VR: CPU, GPU, memory, a suspected memory leak, temperature, battery, bandwidth, fps, latency or packet loss (run vr-stats first). Also covers the scripts vr-stats, vr-immersed, vr-layout, vr-diag, vr-diag-watch, vr-start, vr-reconnect, vr-ready, vr-workspace, vr-term, spotify-vr, chrome-vr, vr-fix and vr-hand-bindings."
 ---
 
 # VR setup — Meta Quest desktop on Linux (Immersed, or WiVRn + WayVR)
@@ -27,6 +27,12 @@ Everything in the Immersed sections was established empirically on Ubuntu 24.04.
 Mutter 46.2, Wayland, AMD Radeon 780M (Phoenix iGPU), Meta Quest 3. Where something is unverified
 it says so.
 
+**If the complaint is stutter or judder, the goal is zero stutter, and that has one non-negotiable
+cost: no custom Linux-side layout.** Keep Mutter's default packing and arrange screens in VR.
+[THE RULE](#the-rule-zero-stutter-means-zero-copy--and-that-costs-you-a-custom-layout) explains why,
+how to check which mode you are in (`vr-stats`), and the one safe ordering if a specific layout is
+unavoidable. Read it before touching `vr-layout`.
+
 ## Install the helper scripts first
 
 The scripts live in `scripts/` next to this file. Copy the ones for your stack onto `PATH`.
@@ -45,7 +51,30 @@ done
 The Immersed scripts need **system** `/usr/bin/python3` with `gi` (GObject introspection). A conda/pyenv python
 usually has no `gi` — do not switch interpreters. The shebang already points at `/usr/bin/python3`.
 
-## THE RULE: keep zero-copy — never change the screen layout while Immersed streams
+## THE RULE: zero stutter means zero-copy — and that costs you a custom layout
+
+**One variable decides whether the video is smooth: whether Mutter hands Immersed DMA-BUF buffers
+(zero-copy), or Immersed copies every frame through RAM (the fallback).** Zero-copy: every screen is
+smooth, including ones not at `(0,0)`. RAM-copy: **non-origin screens judder** (the "only `(0,0)` is
+smooth" effect in §13), ~1.5–2 GB more shared memory that looks like a leak, ~+0.3 core gnome-shell,
+and a later headset reconnect can **kill a stream permanently**. Establish which mode you are in
+*before* touching resolution, codec, bitrate, USB or the headset — none of those matter while the
+frames are being copied.
+
+**Check it, do not assume it.** `vr-stats` prints the verdict:
+
+```bash
+vr-stats | sed -n '/Immersed streams/,/^$/p'
+#   zero-copy: OK (N DMA-BUF buffers)                     <- you have it; protect it
+#   ZERO-COPY: LOST this session (RAM-copy fallback: ...)  <- it broke; restart to get it back
+#   zero-copy: NOT IN USE -- N Mutter memfd (RAM copy) ... <- it was never negotiated here
+#   zero-copy: unknown (no DMA-BUF buffers seen yet)       <- not enough to tell
+```
+
+`LOST` is recoverable; `NOT IN USE` on a host that never offers DMA-BUF is not (see the caveat below).
+
+Everything else worth knowing about the negotiation is in §9 — including how to read it straight out
+of PipeWire when `vr-stats` says *unknown*.
 
 Confirmed 2026-11-06 (Fedora 42, GNOME 48, Intel UHD i5-1335U, Immersed Linux 11.0):
 
@@ -56,10 +85,7 @@ Confirmed 2026-11-06 (Fedora 42, GNOME 48, Intel UHD i5-1335U, Immersed Linux 11
   modifiers 2/1/0/-1, `no more input formats`). Zero-copy is gone **for the rest of that process**; frames
   are copied through RAM. Immersed uses system Mesa/libva — not a bundled-library problem; it is an
   Immersed bug.
-- In the RAM-copy fallback: ~1.5–2 GB more shared memory (looks like a leak), ~+0.3 core gnome-shell,
-  **non-origin screens judder** (the "only `(0,0)` is smooth" effect below), and a later headset
-  reconnect can **kill a stream permanently** (observed 3 times in one hour). Reconnect does not heal it;
-  only a fresh process (`vr-immersed --restart`) does.
+- Reconnect does **not** heal it. Only a fresh process does: `vr-immersed --restart`.
 - With zero-copy intact, a screen **not** at `(0,0)` (ultrawide at `(1920,0)`) was confirmed smooth by the
   user. Immersed's own CPU did **not** change between modes (~2–3 cores; its encoder sends ~60 fps
   regardless of the FPS cap) — zero-copy is about memory, smoothness and stability, not Immersed CPU.
@@ -70,15 +96,37 @@ Confirmed 2026-11-06 (Fedora 42, GNOME 48, Intel UHD i5-1335U, Immersed Linux 11
 `vr-immersed` now holds a `gnome-session-inhibit --inhibit idle:suspend` for as long as Immersed runs (no
 gsettings changed; released automatically). `vr-stats` flags a lock during the session.
 
-So: start with `vr-immersed`, keep Mutter's default packing, arrange screens **in VR** only, and never
-script layout changes during a session. Multiple screens are fine as long as zero-copy holds (watch GPU
-busy in `vr-stats`). The layout watcher (`vr-layout watch`) is opt-in (`vr-immersed --watch`) and not
-recommended. `~/.config/monitors.xml` cannot pre-place a virtual screen either: Mutter gives `Meta-*` a new
-serial on every connect, so stored configs never match.
+### The accepted tradeoff: the Linux-side layout is not yours to set
+
+Zero stutter and a custom Mutter layout are **mutually exclusive in a live session**. Choose zero
+stutter. In practice:
+
+- Start with `vr-immersed` and **keep Mutter's default packing**. Do not run `vr-layout apply`
+  mid-session — not to tidy, not to restore a drifted position, not after a reconnect.
+- Arrange screens **in the VR UI only**. Those moves are computed on the headset and pushed to
+  Immersed; they never re-negotiate the PipeWire stream, so they cannot cost you zero-copy.
+- Multiple screens are fine as long as zero-copy holds — watch GPU busy in `vr-stats`, and `vr-stats`
+  itself is read-only and safe to run any time.
+- The layout watcher (`vr-layout watch`) re-applies a layout **on Connect** — which is exactly the
+  renegotiation that breaks zero-copy. It is opt-in (`vr-immersed --watch`) and **not recommended**.
+- `~/.config/monitors.xml` cannot pre-place a virtual screen to work around this: Mutter gives `Meta-*`
+  a new serial on every connect, so stored configs never match.
+- **The one safe ordering**, if a specific Linux-side layout is genuinely required: apply it *before*
+  the headset connects, then let Immersed negotiate fresh. If you changed the layout while streaming,
+  you are in the RAM-copy fallback until `vr-immersed --restart`.
+
+This is a deliberate, measured tradeoff, not an oversight: an untidy layout that is smooth beats a
+tidy one that judders. Say so plainly rather than offering `vr-layout apply` as a fix.
+
+**AMD/Ubuntu caveat — verify before promising the fix.** On Ubuntu 24.04 / Mutter 46.2 / Radeon 780M,
+measured 2026-11-06, zero-copy was *never* negotiated: Mutter advertised `dataType: 4` (MemFd only)
+and Immersed advertised `6` (MemPtr|MemFd) — the DMA-BUF bit appeared on **neither** side, and the
+process held 16 `mutter-screen-cast-memfd` fds and zero dmabuf fds. So on such a host the RAM-copy
+path is structural, `vr-immersed --restart` will not restore anything, and the §13 `(0,0)` guidance
+still applies. Run `vr-stats` first and read its verdict; §9 shows how to confirm it yourself.
 
 The sections below on `(0,0)` smoothness and layouts were written before this was known; on hosts where
-zero-copy holds they mostly don't apply. Unverified on the AMD host — check its logs for
-`Failed to query DMA-BUF` before assuming the same.
+zero-copy holds they mostly don't apply.
 
 ## Health check: run `vr-stats` first
 
@@ -93,8 +141,9 @@ Mutter layout and the layout watcher.
 
 Reading it:
 - **Low bitrate is not a fault** — the encoder only sends changes; a static desktop is tens of kbit/s.
-- **`(x,y)` in streams is Immersed's offset.** The `(0,0)` stream is the smooth one; a physical-screen
-  offset that "looks wrong" is not a freeze signal (see section 5).
+- **`(x,y)` in streams is Immersed's offset.** With zero-copy OK, any screen can be smooth. In the
+  RAM-copy fallback only the `(0,0)` stream is — so read the `zero-copy:` line before the offsets.
+  A physical-screen offset that "looks wrong" is not itself a freeze signal (see section 5).
 - **`shared` memory on an iGPU includes graphics/screencast buffers** and rises/falls with screen count; it
   is not a leak. A leak shows as a steadily climbing Immersed trend across several runs, not one snapshot.
 - **PipeWire stream errors** (`no more input formats`) mean a stream died; a frozen screen after one is
@@ -264,6 +313,10 @@ Mutter's layout and the headset's spatial layout are **not** the same thing.
 
 ### Forcing the Linux-side layout via D-Bus
 
+**Read THE RULE first.** Doing this while Immersed streams costs zero-copy and therefore smoothness;
+that is the tradeoff this skill accepts, so treat everything in this subsection as *pre-connect only*
+and as reference for understanding what the script does.
+
 `vr-layout apply` does this. Four traps, each of which cost a failed attempt:
 
 1. `ApplyMonitorsConfig` signature is `(uua(iiduba(ssa{sv}))a{sv})`. The inner monitor is
@@ -347,10 +400,11 @@ snapshots (`layout-YYYYmmdd-HHMMSS.json`); named layouts such as `layout-desired
 `apply only` and deliberately unreachable by `restore`, so the emergency command can never
 re-apply the layout you are escaping. Keep that restriction if you edit the script.
 
-Layout is **not durable**: Immersed re-applies its own config on every session change, so a
-headset reconnect reverts it. Re-run `vr-layout apply` after each connect.
+Layout is **not durable**, and the old advice to fix that — "re-run `vr-layout apply` after each
+connect" — was the thing that broke zero-copy. Under THE RULE the layout stays wherever Mutter's
+default packing puts it; a headset reconnect reverts it and that is fine.
 
-### Layouts are per machine and per profile, and re-applied on every Connect
+### Layouts are per machine and per profile (saving is safe; re-applying is not)
 
 `vr-layout` stores desired layouts in `~/.config/vr-layouts/hosts/<hostname>/<NAME>.json`, where NAME is
 normally the `vr-immersed` profile. Two PCs never share a layout: connector names (`eDP-1` vs `DP-1`) and
@@ -358,19 +412,20 @@ panel sizes differ. Lookup order: `hosts/<host>/<NAME>.json`, `hosts/<host>/defa
 `~/.config/vr-layouts/desired.json`, then the built-in example.
 
 ```bash
-# arrange the screens (GNOME Settings, or a hand-written spec + apply), then:
+# record what Mutter's own packing produced, then look at it later:
 vr-layout save-desired home-wide      # -> hosts/$(uname -n)/home-wide.json
 vr-layout show home-wide              # prints which file it will use
 ```
 
-**Superseded — see THE RULE at the top: re-applying a layout mid-session breaks zero-copy. The watcher is
-now opt-in (`vr-immersed --watch`).** With `--watch`, `vr-immersed` detects the active profile (the one whose
-`VDData` matches `~/.ImmersedConf`) and, if this host has a layout for it, starts `vr-layout watch <profile>` in the background (log:
-`~/.local/state/vr-layout-watch.log`). The watcher re-applies the layout ~3 s after the monitor **set**
-changes to the one the layout describes (= a headset Connect), re-checks once within 15 s in case Immersed
-repacks again, never more than twice per Connect, and ignores plain moves so a manual rearrangement in GNOME
-Settings is not fought. It only sends positions (no monitor on/off), holds a per-host lock (one instance),
-and exits when Immersed stops.
+**`vr-layout apply` is for the pre-connect window only** — see THE RULE at the top. Re-applying a
+layout mid-session breaks zero-copy, so the watcher that used to do that on every Connect is now
+opt-in (`vr-immersed --watch`) and **not recommended**. If `--watch` is on, `vr-immersed` detects the
+active profile (the one whose `VDData` matches `~/.ImmersedConf`) and starts `vr-layout watch <profile>`
+in the background (log: `~/.local/state/vr-layout-watch.log`); it re-applies ~3 s after the monitor
+**set** changes to the one the layout describes (= a headset Connect), re-checks once within 15 s, never
+more than twice per Connect, ignores plain moves, sends positions only, holds a per-host lock, and exits
+when Immersed stops. Every one of those re-applies is a renegotiation that can cost zero-copy — watch
+`vr-stats` after enabling it.
 
 `apply` now **refuses a layout that does not cover every active monitor** — Mutter switches off any monitor
 left out of `ApplyMonitorsConfig`, so a two-screen layout applied to a three-screen profile would have
@@ -760,16 +815,59 @@ raw "N cores" figure **overstates real work** — roughly a third is per-frame b
 waiting on GPU fences. Measured 8.32 MP over three screens reported 1.79 cores, of which
 **~1.2–1.3 was genuinely busy**, dominated by the single PipeWire thread. Quote it that way.
 
-**Why it cannot be reduced:** there is no zero-copy path. Mutter delivers shared-memory frames;
-Immersed must read each one, convert to a format VAAPI accepts (NV12 — `libswscale` is loaded and
-resident), and upload it. That is unavoidable per frame per screen: three screens at 60 fps is
-~180 frame handlings/sec. Cost scales roughly linearly with pixels (measured 4.61 MP → 0.85 cores;
-8.32 MP → 1.79 cores).
+**Why it cannot be reduced *in RAM-copy mode*:** with no zero-copy path, Mutter delivers
+shared-memory frames; Immersed must read each one, convert to a format VAAPI accepts (NV12 —
+`libswscale` is loaded and resident), and upload it. That is unavoidable per frame per screen: three
+screens at 60 fps is ~180 frame handlings/sec. Cost scales roughly linearly with pixels (measured
+4.61 MP → 0.85 cores; 8.32 MP → 1.79 cores).
 
-**Nothing useful can be offloaded.** The dmabuf-vs-SHM choice is Mutter's ScreenCast negotiation,
-not the client's; AMD's VCN has a VPP block that could convert on-GPU but Immersed shows no vpp
-symbols; and the 3D engine's free capacity is irrelevant because a GL/Vulkan capture backend would
-be a different application. Fewer pixels remains the only lever.
+**When DO frames travel zero-copy? Read the negotiation, don't guess.** Two `dataType` fields decide
+it, and they are a *bitmask* over `spa_data_type` (`MemPtr`=1, `MemFd`=2, `DmaBuf`=3, so
+`1<<MemFd` = **4**, `1<<DmaBuf` = **8**). `pw-dump` is JSON, so extract with python rather than grep:
+
+```bash
+pw-dump > /tmp/pw.json
+python3 -I - /tmp/pw.json <<'PY'
+import json, sys
+for o in json.load(open(sys.argv[1])):
+    if o.get('type') != 'PipeWire:Interface:Port':
+        continue
+    p = (o.get('info') or {}).get('props', {}) or {}
+    b = ((o.get('info') or {}).get('params', {}).get('Buffers') or [{}])[0]
+    dt = (b.get('dataType') or {}).get('default')
+    if dt is not None and p.get('port.name') in ('output_1', 'input_1'):
+        print(f"node {p.get('node.id')} {p.get('port.name')} {p.get('port.direction')} dataType={dt}")
+PY
+```
+
+`output_1` on a `gnome-shell` node is **Mutter's producer**; `input_1` on the `Immersed` node is the
+**consumer**. Measured side by side on 2026-11-06:
+
+| Host | Mutter producer | Immersed consumer | Result |
+|---|---|---|---|
+| Fedora 42 / GNOME 48 / Intel UHD | `dataType` with DmaBuf bit | accepts DmaBuf | `vr-stats`: `zero-copy: OK` |
+| Ubuntu 24.04 / Mutter 46.2 / 780M | `dataType: 4` → **MemFd only** | `dataType: 6` → **MemPtr\|MemFd** | RAM copy, `zero-copy: NOT IN USE` |
+
+Mutter 46 picks the buffer type in `meta_screen_cast_stream_src` from whether the negotiated format
+carries a **`modifier`** property: present → `1 << SPA_DATA_DmaBuf`, absent → `1 << SPA_DATA_MemFd`
+(one type, not a choice). On the 780M host Mutter *did* advertise DMA-BUF format modifiers on its
+`EnumFormat`, yet fixed on `dataType: 4` — and Immersed never offered the DmaBuf bit either. So on
+that host the copy is structural and no restart, profile or config key changes it. **Check both sides
+before telling anyone zero-copy is recoverable.**
+
+Fastest cross-check that frames are going through CPU memory:
+
+```bash
+PID=$(pgrep -x Immersed | head -1)
+ls -l /proc/$PID/fd | grep -c dmabuf            # >0 means zero-copy buffers are live
+ls -l /proc/$PID/fd | grep -c mutter-screen-cast-memfd   # >0 means RAM copies
+```
+
+**Nothing useful can be offloaded.** Neither `dataType` is settable by `~/.ImmersedConf` — there is
+no key for it, and it is a PipeWire negotiation between gnome-shell and Immersed, not a client
+option; AMD's VCN has a VPP block that could convert on-GPU but Immersed shows no vpp symbols; and
+the 3D engine's free capacity is irrelevant because a GL/Vulkan capture backend would be a different
+application. In RAM-copy mode, fewer pixels remains the only lever.
 
 **`vcn_busy_percent` reaching 100 is NOT saturation.** It is bursty and independent of pixel count:
 ten one-second samples at only 4.61 MP read `42, 100, 49, 44, 44, 43, 100, 99, 49, 100` while
@@ -927,8 +1025,9 @@ sit.
 
 **Mutter auto-saves the virtual layout to `~/.config/monitors.xml`, but it will not restore it the same
 way.** Mutter picks an entry by *which connectors are present*, and `Meta-*` connectors only exist
-while streaming — so after a replug it selects a different entry and re-packs the screens. Re-run
-`vr-layout apply` against a current `desired.json` instead of expecting persistence.
+while streaming — so after a replug it selects a different entry and re-packs the screens. **Do not
+answer that with `vr-layout apply` under a live session** — see THE RULE at the top; take Mutter's
+repacked layout and arrange in VR, or apply before the headset connects.
 
 **Snap-grid / StageLayout lives only on the headset.** Immersed on the PC has zero snap-related strings;
 `~/.ImmersedConf` has no key for it. There is **no adb write path** — `run-as` is refused
@@ -993,6 +1092,11 @@ Mbps) it is not the bottleneck. Do not "fix" stutter by changing cables without 
 Established 2026-11-03 on Ubuntu 24.04 / GNOME 46.0 / libmutter 46.2 / Ryzen 7 8700G + 780M,
 three virtual screens, Quest 3 over USB. Use this when the report is **"video isn't smooth"** rather
 than "the screen is frozen" — a different failure with different evidence.
+
+**Check zero-copy first** (`vr-stats` → `zero-copy:`). It is the highest-leverage variable and it
+reorders everything in this section: with DMA-BUF zero-copy, non-origin screens are smooth and most
+of the `(0,0)` material below does not apply; in the RAM-copy fallback it is the section's central
+fact. Do not start at the hop table while the frames are being copied.
 
 ### The path, and what to measure at each hop
 
@@ -1138,10 +1242,12 @@ Two traps that make this test misleading if unhandled:
 **37%** — the media engine was **not** saturated by three 60 fps streams, so encoder saturation is not
 what limits this configuration. Two `plannotator` pollers were eating **103% CPU each** throughout.
 
-### THE ACTUAL CAUSE OF PER-SCREEN JUDDER: only the stream at capture offset `(0,0)` is smooth
+### THE `(0,0)` EFFECT: in RAM-copy mode, only the stream at capture offset `(0,0)` is smooth
 
 Established 2026-11-03 by a slot swap on a three-screen setup. **This supersedes every size/rotation/alignment
-theory in this section** — each was tested and cleared before this one was found.
+theory in this section** — each was tested and cleared before this one was found. **Scope note
+(2026-11-06): this is the RAM-copy fallback's signature, not a universal rule — see THE RULE. Read
+`vr-stats`' `zero-copy:` line before applying anything here.**
 
 Swap the *stream configurations* between `VDData` slots (stop Immersed first, byte-patch, relaunch, reconnect)
 and watch which screen judders:
@@ -1173,18 +1279,23 @@ Consequences for how to diagnose this:
 
 **Check the offsets after every layout change — staleness is possible but not guaranteed.** Applying a
 layout can propagate straight through to Immersed's capture rectangles, or leave them on the old
-position; both have been observed on the same host. After `vr-layout apply`, wait for a `Screen Info`
-block whose timestamp is **newer than the apply** and confirm the `Capture -` offsets actually moved
-before concluding anything about feel. Also note `ApplyMonitorsConfig` **may not advance the D-Bus
-serial** even when it commits — an unchanged serial is not evidence of failure, and the end state in
-`GetCurrentState` is the thing to trust.
+position; both have been observed on the same host. **Under THE RULE you should not be applying one
+mid-session at all**, so this applies to a pre-connect apply or to a layout Mutter changed on its own:
+wait for a `Screen Info` block whose timestamp is **newer than the change** and confirm the
+`Capture -` offsets actually moved before concluding anything about feel — and re-read `vr-stats`'
+`zero-copy:` line, because that change may have cost it. Also note `ApplyMonitorsConfig` **may not
+advance the D-Bus serial** even when it commits — an unchanged serial is not evidence of failure, and
+the end state in `GetCurrentState` is the thing to trust.
 
 **The layout drifts off the origin without a reconnect.** Observed: a working `(0,0)` layout later read
 `(0,1120)` / `(1056,400)` / `(3440,0)` with the 720p having taken primary. `desired.json` was still
 correct and `vr-layout show` still printed the right target, so this is drift in the applied state, not
-a config fault. **So never trust a recorded layout — re-read `vr-layout show` and the `Capture -` offsets
-whenever someone reports lag**, and re-run `vr-layout apply` to restore. When *nothing* is at `(0,0)`,
-every screen judders, which is why "which one is at `(0,0)`" is the first question to ask.
+a config fault. **Never trust a recorded layout — re-read `vr-layout show` and the `Capture -` offsets
+whenever someone reports lag.** But do **not** reflexively run `vr-layout apply` to "restore" it: under
+THE RULE that is the very thing that keeps you in the RAM-copy fallback. Check `vr-stats` for
+`zero-copy` first — if it is LOST or *unknown* on a host that can do DMA-BUF, `vr-immersed --restart`
+is the fix and the layout is cosmetic. Only when zero-copy is confirmed OK and a non-origin screen
+still judders is the position itself the cause, and even then prefer moving screens in the VR UI.
 
 **Confirmed outcome on this box (2026-11-03): 3440x1440 ultrawide at `(0,0)` + 1440x2560 terminal at
 `(3440,0)` + 1280x720 at `(0,1440)` — 9.56 MP total, ultrawide capture only **44.8 fps** — and the user
@@ -1209,11 +1320,14 @@ cost — "content arrives late" vs "Immersed's conversion is slow".
 framebuffer / first stream) while other streams do offset reads and per-row realignment; or the first
 stream gets a decoder/pipeline resource the others do not. Do not state a mechanism — state the observation.
 
-**Update 2026-11-06: this is most likely a symptom of the RAM-copy fallback (lost zero-copy), not a rule —
-see THE RULE at the top. With zero-copy intact a non-origin screen was smooth. Fix the zero-copy first
-(`vr-immersed --restart`, no layout changes) before rearranging anything.**
+**Update 2026-11-06: this is a symptom of the RAM-copy fallback (lost zero-copy), not a rule —
+see THE RULE at the top. With zero-copy intact a non-origin screen was smooth. Check `vr-stats` for
+`zero-copy` and fix that first (`vr-immersed --restart`, no layout changes) before rearranging anything.
+The rest of this subsection describes the fallback, which is still what many hosts get — on Ubuntu
+24.04 / Mutter 46.2 / 780M zero-copy was never negotiated at all (see THE RULE).**
 
-**What works today (without zero-copy):** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
+**In RAM-copy mode:** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
+You can do that in the VR UI; do not fight Mutter for it.
 
 **Moving the physical panel off the origin can work — confirmed 2026-11-06** (Fedora 42, GNOME 48, Intel
 UHD, laptop `eDP-1` + one 2560x1080 virtual). Applied mid-session: `Meta-0` ultrawide at `(0,0)`, `eDP-1` at
@@ -1345,7 +1459,7 @@ decoder runs; `Allocation failed` means the hardware decoder *is* running but ca
 **Do not trust `debug.log`'s absence of errors as proof a stream is healthy** — it logs only faults, so
 silence means "no fault recorded", not "no fault". Use `logcat` for per-stream questions.
 
-### Quest-side decoder: `NO_MEMORY` → silent software fallback
+### Also not the cause: dropped capture frames and software-rendered browsers
 
 - **Mutter drops capture frames outright** — `gnome-shell: Not enough buffers (16) to accommodate
   damaged regions (N)`, thousands of occurrences per boot. This is Mutter failing to get a capture
@@ -1385,6 +1499,10 @@ sudo perf report --stdio --sort symbol | head -40
 
 ### Ordered remedy list for stutter
 
+0. **Run `vr-stats` and read `zero-copy:`.** `LOST` → `vr-immersed --restart` and stop changing the
+   layout; that is the whole fix, and nothing below substitutes for it. `unknown` on a host that can
+   do DMA-BUF → confirm the negotiation (§9) before assuming it is structural. Only once zero-copy is
+   settled do the steps below matter.
 1. Read one `Screen Info` block; if `Capture` < `Encode` on every screen, it is the capture ceiling.
 2. Check the Quest decoder log for `dequeueOutputBuffer timeout` / `FALLBACK_SOFTWARE` — a headset
    restart may fix more than any PC tuning.
@@ -1393,6 +1511,9 @@ sudo perf report --stdio --sort symbol | head -40
    cores saved.
 5. Remove competing CPU/IO work (VMs, pollers, software-rendered browser). This is the only measured
    CPU lever on such a box.
+
+**Do not add `vr-layout apply` to this list.** A custom Linux-side layout is the tradeoff this skill
+accepts to keep zero-copy; applying one mid-session is a cause of stutter, not a remedy.
 
 ## Honesty rules
 
@@ -1432,7 +1553,17 @@ sudo perf report --stdio --sort symbol | head -40
 - Do not treat `TCP: true. USB: true`, a listening `21000`, or a stale encoder line as evidence of a
   live session.
 - Do not trust a recorded screen layout. Applied layouts drift off `(0,0)` without a reconnect; re-read
-  `vr-layout show` and the `Capture -` offsets before diagnosing judder (see §5).
+  `vr-layout show` and the `Capture -` offsets before diagnosing judder (see §5). But do **not** respond
+  by running `vr-layout apply` mid-session — that is how zero-copy is lost (see THE RULE).
+- **Never change the screen layout while Immersed is streaming.** A live `ApplyMonitorsConfig`, the
+  layout watcher, GNOME Settings → Displays, or a headset-side origin change all renegotiate PipeWire and
+  drop Immersed to RAM copies for the rest of the process. Arrange in the VR UI; fix with
+  `vr-immersed --restart`, not with a layout apply.
+- Do not promise "zero stutter" without first reading `vr-stats`' `zero-copy` verdict. On hosts that
+  never negotiate DMA-BUF (measured: Ubuntu 24.04 / Mutter 46.2 / AMD 780M) the copy path is structural,
+  a restart changes nothing, and the `(0,0)` guidance is still the best available (see THE RULE, §9).
+- Do not claim the `dataType` negotiation can be changed from `~/.ImmersedConf`. There is no key for it;
+  it is decided between gnome-shell and Immersed over PipeWire (see §9).
 - Do not compare Mutter's `x` with the `Capture -` `x` and call a mismatch a bug. Immersed re-derives the
   offset inside the parent screen; check the `y`, which is what decides the origin.
 - On "video isn't smooth", do not blame the link or the encoder before reading capture vs encode FPS
@@ -1449,9 +1580,11 @@ sudo perf report --stdio --sort symbol | head -40
   with the **lowest** mean capture (53.2) and **widest** jitter was the one the user reported as
   **smooth**, while the highest-capture screen felt uneven (see §13). Throughput and perception are
   separate questions, and no PC-side counter substitutes for the user's eyes.
-- **Only the stream at capture offset `(0,0)` is smooth** (measured 2026-11-03 by slot swap). Ask "is it
-  the origin stream", not "which screen". Only one stream can be smooth; put the screen you read on there.
-  Do not assert a mechanism — the observation is solid, the cause is not (see §13).
+- **Only the stream at capture offset `(0,0)` is smooth** — **in RAM-copy mode.** With zero-copy intact
+  every screen is smooth, so check `vr-stats` for `zero-copy` before rearranging anything (2026-11-06).
+  In the fallback, ask "is it the origin stream", not "which screen"; only one can be smooth, so put the
+  screen you read on there — ideally by moving it in the VR UI. Do not assert a mechanism; the
+  observation is solid, the cause is not (see §13).
 - Do not confuse "the rotated stream judders" with a real result: before the swap the portrait was both the
   only rotated stream and the only one at `(0,0)`. Rotation, resolution, aspect and row alignment were all
   independently cleared.

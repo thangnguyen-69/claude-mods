@@ -126,11 +126,18 @@ if pgrep -x Immersed >/dev/null; then
     echo "        With zero-copy OK every screen can be smooth; without it only the (0,0) one is."
     pid=$(pgrep -x Immersed | head -1)
     nd=$(ls -l /proc/$pid/fd 2>/dev/null | grep -c dmabuf)
+    nmem=$(ls -l /proc/$pid/fd 2>/dev/null | grep -c 'mutter-screen-cast-memfd')
     if grep -q -E 'Failed to query DMA-BUF|EGL_NOT_INITIALIZED' "$L"; then
       echo "  ZERO-COPY: LOST this session (RAM-copy fallback: more memory, non-origin screens may judder,"
       echo "             a reconnect can kill a stream). Fix: vr-immersed --restart, then don't move screens."
     elif [ "$nd" -gt 0 ]; then
       echo "  zero-copy: OK ($nd DMA-BUF buffers)"
+    elif [ "$nmem" -gt 0 ]; then
+      echo "  zero-copy: NOT IN USE -- $nmem Mutter memfd (RAM copy) buffers on a fresh-looking process."
+      echo "             Check the negotiation both ways before blaming the layout; on some hosts"
+      echo "             (Ubuntu 24.04 / Mutter 46.2 / AMD) DMA-BUF is never offered at all."
+      echo "             Compare producer vs consumer dataType (4=MemFd only, 8=DmaBuf) with the"
+      echo "             pw-dump snippet in SKILL.md, section 9, \"When DO frames travel zero-copy\"."
     else
       echo "  zero-copy: unknown (no DMA-BUF buffers seen yet)"
     fi
