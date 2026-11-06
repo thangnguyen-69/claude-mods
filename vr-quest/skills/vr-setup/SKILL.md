@@ -1,6 +1,6 @@
 ---
 name: vr-setup
-description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, or the free open-source WiVRn + WayVR stack. Use when the user says /vr-setup, asks to install or configure Immersed, wants virtual displays, extra monitors, a portrait or ultra-wide/high VR screen, needs the monitors arranged or positioned, reports VR screens stuck/frozen/laggy, that a virtual display won't change resolution, that Immersed is not updating or needs a restart, that GNOME Displays shows monitors overlapping, or that a VR session died. Also use for WiVRn or WayVR: installing them, a Quest that will not connect over USB (adb unauthorized), WayVR showing black or nothing, hand tracking or the wrist watch not working, opening apps or a terminal inside VR, typing into VR apps with the physical keyboard (Super+Z), recentering, or avoiding a VR subscription. Also use when VR panels lose their positions or the user wants the screen layout remembered. Also use when WiVRn/WayVR wobbles or judders on a weak iGPU (switch to Immersed). Also covers the scripts vr-immersed, vr-layout, vr-diag, vr-diag-watch, vr-start, vr-reconnect, vr-ready, vr-workspace, vr-term, spotify-vr, chrome-vr, vr-fix and vr-hand-bindings."
+description: "Set up and debug a Linux VR desktop on a Meta Quest: Immersed VR, or the free open-source WiVRn + WayVR stack. Use when the user says /vr-setup, asks to install or configure Immersed, wants virtual displays, extra monitors, a portrait or ultra-wide/high VR screen, needs the monitors arranged or positioned, reports VR screens stuck/frozen/laggy, that a virtual display won't change resolution, that Immersed is not updating or needs a restart, that GNOME Displays shows monitors overlapping, or that a VR session died. Also use for WiVRn or WayVR: installing them, a Quest that will not connect over USB (adb unauthorized), WayVR showing black or nothing, hand tracking or the wrist watch not working, opening apps or a terminal inside VR, typing into VR apps with the physical keyboard (Super+Z), recentering, or avoiding a VR subscription. Also use when VR panels lose their positions or the user wants the screen layout remembered. Also use when WiVRn/WayVR wobbles or judders on a weak iGPU (switch to Immersed). Also use when the user asks how VR is performing or for resource usage during VR: CPU, GPU, memory, a suspected memory leak, temperature, battery, bandwidth, fps, latency or packet loss (run vr-stats first). Also covers the scripts vr-stats, vr-immersed, vr-layout, vr-diag, vr-diag-watch, vr-start, vr-reconnect, vr-ready, vr-workspace, vr-term, spotify-vr, chrome-vr, vr-fix and vr-hand-bindings."
 ---
 
 # VR setup — Meta Quest desktop on Linux (Immersed, or WiVRn + WayVR)
@@ -35,7 +35,7 @@ Look before overwriting: if a same-named script already exists in `~/.local/bin`
 ```bash
 SKILL_DIR="<this skill's base directory>"     # the folder containing this SKILL.md
 # Immersed
-for f in vr-immersed vr-layout vr-diag vr-diag-watch; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
+for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
 # WiVRn + WayVR
 for f in wayvr vr-start vr-reconnect vr-ready vr-workspace vr-term alacritty-vr spotify-vr chrome-vr vr-fix vr-hand-bindings; do
   install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f
@@ -44,6 +44,26 @@ done
 
 The Immersed scripts need **system** `/usr/bin/python3` with `gi` (GObject introspection). A conda/pyenv python
 usually has no `gi` — do not switch interpreters. The shebang already points at `/usr/bin/python3`.
+
+## Health check: run `vr-stats` first
+
+When the user asks "how is it running", for CPU/GPU/memory/temperature/bandwidth/fps, or whether something
+leaks, **run `vr-stats` before any ad-hoc commands** (`vr-stats 10` for steadier numbers). It is read-only,
+needs no root, and prints in one go: CPU busy + top processes, GPU busy (Intel via RC6 residency, AMD via
+`gpu_busy_percent` + VCN), RAM/swap/shared, Immersed's RAM+swap and its **trend since the first `vr-stats`
+of this Immersed process** (leak check — run it again later to compare), temperature/fan/power profile/
+battery, per-interface throughput + adb state, every Immersed stream from the newest `Screen Info` block
+(capture vs sent fps, bitrate, encode latency, RTT, packet loss), PipeWire stream errors this session, the
+Mutter layout and the layout watcher.
+
+Reading it:
+- **Low bitrate is not a fault** — the encoder only sends changes; a static desktop is tens of kbit/s.
+- **`(x,y)` in streams is Immersed's offset.** The `(0,0)` stream is the smooth one; a physical-screen
+  offset that "looks wrong" is not a freeze signal (see section 5).
+- **`shared` memory on an iGPU includes graphics/screencast buffers** and rises/falls with screen count; it
+  is not a leak. A leak shows as a steadily climbing Immersed trend across several runs, not one snapshot.
+- **PipeWire stream errors** (`no more input formats`) mean a stream died; a frozen screen after one is
+  fixed by reconnecting in the headset (the layout watcher then restores the layout).
 
 ## 1. Install Immersed
 

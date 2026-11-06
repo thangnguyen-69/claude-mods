@@ -29,6 +29,7 @@ vr-quest/
     SKILL.md            # stack picker + the Immersed procedure and traps
     wivrn-wayvr.md      # the WiVRn + WayVR procedure and traps
     scripts/
+      vr-stats          # one-shot health check: CPU, GPU, memory (+ Immersed leak trend), temps, network, stream fps/latency
       vr-immersed       # Immersed: start + open on the Quest; per-place profiles (auto by Wi-Fi)
       vr-layout         # Immersed: per-machine/per-profile Mutter layout; save / apply / watch (re-apply on Connect)
       vr-diag           # Immersed: one-shot diagnostic snapshot (+ --compare)

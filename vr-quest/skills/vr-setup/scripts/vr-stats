@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# One-screen VR health check: CPU, GPU, memory, temperature, power, network,
+# Immersed stream fps/bitrate/latency, screen layout and the layout watcher.
+#
+#   vr-stats          sample over 3 s and print a summary
+#   vr-stats 10       sample over 10 s (steadier numbers)
+#
+# Read-only: changes nothing. No root needed. Works on Intel (RC6 residency)
+# and AMD (gpu_busy_percent) GPUs; sections whose source is missing are skipped.
+set -u
+WIN=${1:-3}
+case "$WIN" in ''|*[!0-9]*) echo "usage: vr-stats [seconds]" >&2; exit 2 ;; esac
+[ "$WIN" -ge 1 ] || WIN=1
+
+hdr() { printf '\n== %s\n' "$1"; }
+
+# ---- start counters ---------------------------------------------------------
+read -r _ u1 n1 s1 i1 w1 q1 sq1 st1 _ < /proc/stat
+gt=$(ls -d /sys/class/drm/card*/gt/gt0 2>/dev/null | head -1)
+amd=$(ls /sys/class/drm/card*/device/gpu_busy_percent 2>/dev/null | head -1)
+[ -n "$gt" ] && rc1=$(cat "$gt/rc6_residency_ms" 2>/dev/null)
+ifaces=$(ls /sys/class/net | grep -v -E '^(lo|docker|veth|br-|virbr|tailscale)')
+declare -A tx1 rx1
+for i in $ifaces; do
+  tx1[$i]=$(cat /sys/class/net/$i/statistics/tx_bytes); rx1[$i]=$(cat /sys/class/net/$i/statistics/rx_bytes)
+done
+amd_sum=0; amd_n=0
+end=$((SECONDS + WIN))
+while [ $SECONDS -lt $end ]; do
+  [ -n "$amd" ] && { amd_sum=$((amd_sum + $(cat "$amd"))); amd_n=$((amd_n + 1)); }
+  sleep 0.5
+done
+
+# ---- CPU --------------------------------------------------------------------
+read -r _ u2 n2 s2 i2 w2 q2 sq2 st2 _ < /proc/stat
+busy=$(( (u2+n2+s2+q2+sq2+st2) - (u1+n1+s1+q1+sq1+st1) ))
+idle=$(( (i2+w2) - (i1+w1) ))
+hdr "CPU ($(nproc) threads, load $(cut -d' ' -f1-3 /proc/loadavg))"
+echo "  busy: $(( busy * 100 / (busy + idle) ))%"
+top -bn2 -d1 -o %CPU | awk '/^top -/{n++} n==2 && $1 ~ /^[0-9]+$/ && $9 > 5 {print $1, $9}' | head -8 |
+while read -r pid cpu; do
+  name=$(cat /proc/$pid/comm 2>/dev/null) || continue
+  rss=$(awk '/^VmRSS:/{print int($2/1024)}' /proc/$pid/status 2>/dev/null)
+  printf "  %-16s %6.0f%%  (%.1f cores)  %s MB\n" "$name" "$cpu" "$(echo "$cpu/100" | bc -l)" "${rss:-?}"
+done
+
+# ---- GPU --------------------------------------------------------------------
+hdr "GPU"
+if [ -n "$gt" ] && [ -n "${rc1:-}" ]; then
+  rc2=$(cat "$gt/rc6_residency_ms")
+  b=$(( 100 - (rc2 - rc1) * 100 / (WIN * 1000) )); [ $b -lt 0 ] && b=0
+  echo "  busy: ~${b}% (Intel, from RC6 idle residency)  freq now: $(cat "$gt/rps_act_freq_mhz")/$(cat "$gt/rps_max_freq_mhz") MHz"
+elif [ -n "$amd" ] && [ $amd_n -gt 0 ]; then
+  dev=${amd%/gpu_busy_percent}
+  echo "  busy: ~$((amd_sum / amd_n))% (AMD)"
+  [ -f "$dev/vcn_busy_percent" ] && echo "  video encoder (VCN): $(cat "$dev/vcn_busy_percent")%"
+  [ -f "$dev/pp_dpm_sclk" ] && echo "  sclk: $(grep '\*' "$dev/pp_dpm_sclk" | awk '{print $2}')"
+else
+  echo "  (no GPU busy counter found)"
+fi
+
+# ---- memory -----------------------------------------------------------------
+hdr "Memory"
+free -h | awk '/^Mem:/{print "  RAM:  "$3" used of "$2", "$7" available"} /^Swap:/{print "  swap: "$3" used of "$2}'
+awk '/^Shmem:/{printf "  shared: %.1f GB (on an iGPU this includes graphics/screencast buffers; moves with screen count)\n", $2/1048576}' /proc/meminfo
+for pid in $(pgrep -x Immersed); do
+  awk -v p="$pid" '/^VmRSS:/{r=int($2/1024)} /^VmSwap:/{w=int($2/1024)} END{printf "  Immersed (pid %s): %s MB RAM + %s MB swap\n", p, r, w}' /proc/$pid/status
+  # Leak check: append to a per-session history and compare with the first sample.
+  hist="$HOME/.local/state/vr-stats-immersed-$pid.log"
+  echo "$(date +%s) $(awk '/^VmRSS:/{r=$2} /^VmSwap:/{w=$2} END{print int((r+w)/1024)}' /proc/$pid/status)" >> "$hist"
+  awk 'NR==1{t0=$1;m0=$2} {t=$1;m=$2} END{if (NR>1 && t>t0) printf "  Immersed trend: %+d MB over %d min (%d samples since first vr-stats this session)\n", m-m0, (t-t0)/60, NR}' "$hist"
+done
+
+# ---- thermals / power -------------------------------------------------------
+hdr "Thermals & power"
+if command -v sensors >/dev/null; then
+  sensors 2>/dev/null | grep -E '^(Package id 0|Tctl|edge|fan[0-9])' | grep -v ' 0 RPM' | sed 's/  */ /g; s/(.*//; s/^/  /'
+fi
+command -v tuned-adm >/dev/null && echo "  power profile: $(tuned-adm active 2>/dev/null | sed 's/.*: //')"
+command -v powerprofilesctl >/dev/null && ! command -v tuned-adm >/dev/null && echo "  power profile: $(powerprofilesctl get)"
+for b in /sys/class/power_supply/BAT*; do
+  [ -d "$b" ] || continue
+  w=$(awk '{printf "%.1f", $1/1e6}' "$b/power_now" 2>/dev/null)
+  echo "  battery: $(cat "$b/capacity")% $(cat "$b/status")${w:+, $w W}"
+done
+
+# ---- network ----------------------------------------------------------------
+hdr "Network (over ${WIN}s)"
+for i in $ifaces; do
+  t=$(( ($(cat /sys/class/net/$i/statistics/tx_bytes) - ${tx1[$i]}) * 8 / WIN / 1000 ))
+  r=$(( ($(cat /sys/class/net/$i/statistics/rx_bytes) - ${rx1[$i]}) * 8 / WIN / 1000 ))
+  [ $t -gt 0 ] || [ $r -gt 0 ] || continue
+  printf "  %-14s out %6d kbit/s   in %6d kbit/s\n" "$i" "$t" "$r"
+done
+if command -v adb >/dev/null; then
+  st=$(adb get-state 2>/dev/null) && echo "  headset on USB (adb: $st)" || echo "  headset not on USB/adb"
+fi
+
+# ---- Immersed ---------------------------------------------------------------
+hdr "Immersed streams"
+if pgrep -x Immersed >/dev/null; then
+  L=$(ls -t "$HOME"/.Immersed/Logs/*.txt 2>/dev/null | head -1)
+  if [ -n "$L" ]; then
+    awk '
+      /Screen Info =/ { n=0; delete cap; delete enc; when=prev }
+      { if ($1 ~ /^20[0-9][0-9]-/) prev=$1" "$2 }
+      /^Capture - / { cap[n]=$0 }
+      /^Encoder - / { enc[n]=$0; n++ }
+      END {
+        printf "  (Screen Info block at %s)\n", substr(when,12,8)
+        for (k=0; k<n; k++) {
+          c=cap[k]; e=enc[k]
+          match(c, /\([0-9]+, [0-9]+\) [0-9]+ x [0-9]+/); geo=substr(c,RSTART,RLENGTH)
+          match(c, /@ [0-9.]+ FPS/); cf=substr(c,RSTART+2,RLENGTH-6)
+          match(e, /FPS:[0-9.]+/); ef=substr(e,RSTART+4,RLENGTH-4)
+          match(e, /Bitrate: [0-9]+kbps/); br=substr(e,RSTART+9,RLENGTH-9)
+          match(e, /Latency: [0-9.]+s/); lat=substr(e,RSTART+9,RLENGTH-10)*1000
+          rtt=""; if (match(e, /RTT: [0-9]+/)) rtt=substr(e,RSTART+5,RLENGTH-5)
+          loss=""; if (match(e, /PacketLoss: [0-9.]+/)) loss=substr(e,RSTART+12,RLENGTH-12)*100
+          printf "  %-26s capture %5.1f fps  sent %5.1f fps  %8s  enc %4.1f ms", geo, cf, ef, br, lat
+          if (rtt != "") printf "  RTT %s ms  loss %.2f%%", rtt, loss
+          printf "\n"
+        }
+      }' "$L"
+    echo "  note: (x,y) is Immersed's own offset; the stream at (0,0) is the smooth one, and the"
+    echo "        physical screen's offset is not a freeze signal. Low bitrate = little motion, not a fault."
+    errs=$(grep -c -E 'PipeWire (stream state|remote) error' "$L")
+    [ "$errs" -gt 0 ] && echo "  WARNING: $errs PipeWire stream error(s) this session; last: $(grep -E 'PipeWire (stream state|remote) error' "$L" | tail -1 | cut -c12-19). A frozen screen = reconnect in the headset."
+  fi
+else
+  echo "  Immersed agent not running"
+fi
+
+# ---- layout -----------------------------------------------------------------
+hdr "Screen layout"
+if command -v vr-layout >/dev/null; then
+  vr-layout show 2>/dev/null | sed -n '2,/^$/p' | sed '/^$/d'
+fi
+if pgrep -f 'vr-layout watch' >/dev/null; then
+  echo "  layout watcher: running ($(pgrep -af 'vr-layout watch' | awk '{print $NF}' | head -1)); last: $(tail -1 "$HOME/.local/state/vr-layout-watch.log" 2>/dev/null)"
+else
+  echo "  layout watcher: not running"
+fi
