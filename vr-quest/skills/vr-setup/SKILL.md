@@ -171,6 +171,30 @@ excluded: compositor (Mutter 48 logic identical), PipeWire version gates (all cl
   (`MemPtr|MemFd|DmaBuf`). `vr-immersed --restart` changes nothing in the meantime, and until this is
   solved the §13 `(0,0)` guidance is what keeps the readable screen smooth.
 
+**Status of the disassembly (2026-11-07) — the app's own EGL path works.** Read from the binary with
+`objdump`/`nm` (it is **not stripped**, but its `.debug_*` sections are ~100-byte stubs, so there are
+symbol names and **no line info** — `addr2line` returns `??:?`):
+
+- `StartScreenCastStream` calls `pw_get_library_version()` → `ParsePipeWireVersion()` → compares
+  against `kDmaBufModifierMinVersion` (0.3.33) and one more gate, `AND`s the two results, and only on
+  success calls `EglDmaBuf::QueryDmaBufModifiers`. **That branch is taken here** — `pw_get_library_version()`
+  returns `"1.0.5"`, which is `>= 0.3.33`. So the version gates are not the blocker, confirmed at the
+  instruction level rather than by inference.
+- `EglDmaBuf`'s constructor `dlopen`s **`libEGL.so.1`** and resolves its entry points via
+  `eglGetProcAddress`; failure logs `Unable to load EGL entry functions.` Those strings live in
+  `.../NativeWrapper/Video/Capture/rtcbase/linux/wayland/egl_dmabuf.cc`.
+- **Reproducing that exact sequence succeeds on this host**: `dlopen("libEGL.so.1")` OK,
+  `eglQueryDmaBufFormatsEXT` / `eglQueryDmaBufModifiersEXT` / `eglCreateImageKHR` /
+  `eglGetPlatformDisplayEXT` **all resolve**, `eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_KHR, gbm_dev)`
+  initialises on radeonsi, and `eglQueryDmaBufModifiersEXT(ARGB8888)` returns **6** modifiers led by
+  `0x020000001046bb04` — the value Mutter offers as `alt1`.
+
+So every component the app depends on answers correctly when driven the same way. What remains is the
+**pod construction**: `BuildFormat(spa_pod_builder*, unsigned, std::vector<uint64_t> const&)` takes the
+modifier list, but the `Buffers` pod's `dataType` is built separately — that value is where the `6`
+instead of `14` is decided, and it is the last unexplained step. A decompiler is the right tool for it;
+`objdump` gets symbol-level structure but not the conditionals cleanly.
+
 The sections below on `(0,0)` smoothness and layouts were written before this was known; on hosts where
 zero-copy holds they mostly don't apply.
 
