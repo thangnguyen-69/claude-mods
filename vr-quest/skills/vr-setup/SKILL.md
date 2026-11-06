@@ -127,12 +127,24 @@ stutter. In practice:
 This is a deliberate, measured tradeoff, not an oversight: an untidy layout that is smooth beats a
 tidy one that judders. Say so plainly rather than offering `vr-layout apply` as a fix.
 
-**AMD/Ubuntu caveat — verify before promising the fix.** On Ubuntu 24.04 / Mutter 46.2 / Radeon 780M,
-measured 2026-11-06, zero-copy was *never* negotiated: Mutter advertised `dataType: 4` (MemFd only)
-and Immersed advertised `6` (MemPtr|MemFd) — the DMA-BUF bit appeared on **neither** side, and the
-process held 16 `mutter-screen-cast-memfd` fds and zero dmabuf fds. So on such a host the RAM-copy
-path is structural, `vr-immersed --restart` will not restore anything, and the §13 `(0,0)` guidance
-still applies. Run `vr-stats` first and read its verdict; §9 shows how to confirm it yourself.
+**AMD/Ubuntu caveat — this host declines DMA-BUF at runtime, and the cause is NOT established.**
+On Ubuntu 24.04 / Mutter 46.2 / Radeon 780M, measured 2026-11-07: Mutter advertised `dataType: 4`
+(MemFd only) and Immersed advertised `6` (MemPtr|MemFd) — the DMA-BUF bit on **neither** side; the
+process held 16 `mutter-screen-cast-memfd` fds and zero dmabuf fds. Mutter 48 has **byte-identical**
+buffer-type logic, so a newer compositor is *not* what differs between hosts, and the app is not
+patched (AppImage sha256 matches the upstream download). Immersed's own `kDmaBufMinVersion` is
+**3.24**, `kDmaBufModifierMinVersion` **3.33**, `kDropSingleModifierMinVersion` **3.40** — all cleared
+by PipeWire 1.0.5, so there is no version gate. Its capture path *does* link the DMA-BUF code
+(`StartScreenCastStream` builds `EglDmaBuf` and calls `QueryDmaBufModifiers`; `ProcessBuffer` calls
+`ImageFromDmaBuf`), so this is a **runtime decline**, not a missing capability.
+
+**Do not call it structural.** An earlier version of this section did, and it was wrong twice over
+(it also read the version gates as `0`, from 4 bytes of a 12-byte struct). What is established is
+only the *symptom*: on this host DMA-BUF is not negotiated, so `vr-immersed --restart` changes
+nothing and the §13 `(0,0)` guidance still applies. Where the negotiation is declined is unknown —
+Immersed logs nothing about the decision. A safe next step (no headset connected, so no `Meta-*`
+monitors live and the §11 crash path cannot fire) is to relaunch with `LIBGL_DEBUG=verbose
+MESA_DEBUG=1` and see where the DMA-BUF path bails. Narrow any claim to what was measured.
 
 The sections below on `(0,0)` smoothness and layouts were written before this was known; on hosts where
 zero-copy holds they mostly don't apply.
@@ -886,10 +898,12 @@ PY
 
 Mutter 46 picks the buffer type in `meta_screen_cast_stream_src` from whether the negotiated format
 carries a **`modifier`** property: present → `1 << SPA_DATA_DmaBuf`, absent → `1 << SPA_DATA_MemFd`
-(one type, not a choice). On the 780M host Mutter *did* advertise DMA-BUF format modifiers on its
-`EnumFormat`, yet fixed on `dataType: 4` — and Immersed never offered the DmaBuf bit either. So on
-that host the copy is structural and no restart, profile or config key changes it. **Check both sides
-before telling anyone zero-copy is recoverable.**
+(one type, not a choice). Mutter 48 is identical here (verified from the gnome-48 source), so the
+compositor version is not what differs between hosts. On the 780M host Mutter *did* advertise DMA-BUF
+format modifiers on its `EnumFormat`, yet fixed on `dataType: 4` — because Immersed declined to offer
+the DmaBuf bit. **Where Immersed makes that decision is unknown** (see THE RULE): it is a runtime
+decline from a binary that links the whole DMA-BUF path, not a missing capability. Check both sides
+before telling anyone zero-copy is or is not recoverable.
 
 Fastest cross-check that frames are going through CPU memory:
 
@@ -1672,9 +1686,11 @@ accepts to keep zero-copy; applying one mid-session is a cause of stutter, not a
   layout watcher, GNOME Settings → Displays, or a headset-side origin change all renegotiate PipeWire and
   drop Immersed to RAM copies for the rest of the process. Arrange in the VR UI; fix with
   `vr-immersed --restart`, not with a layout apply.
-- Do not promise "zero stutter" without first reading `vr-stats`' `zero-copy` verdict. On hosts that
-  never negotiate DMA-BUF (measured: Ubuntu 24.04 / Mutter 46.2 / AMD 780M) the copy path is structural,
-  a restart changes nothing, and the `(0,0)` guidance is still the best available (see THE RULE, §9).
+- Do not promise "zero stutter" without first reading `vr-stats`' `zero-copy` verdict. On this host
+  family (Ubuntu 24.04 / Mutter 46.2 / AMD 780M) DMA-BUF is not negotiated, so a restart changes
+  nothing and the `(0,0)` guidance is the best available — but do **not** call that structural or
+  unfixable. The decline happens at runtime in Immersed, whose DMA-BUF code is present and whose
+  version gates (3.24 / 3.33 / 3.40) are all satisfied; the cause is not established (see THE RULE, §9).
 - Do not claim the `dataType` negotiation can be changed from `~/.ImmersedConf`. There is no key for it;
   it is decided between gnome-shell and Immersed over PipeWire (see §9).
 - Do not compare Mutter's `x` with the `Capture -` `x` and call a mismatch a bug. Immersed re-derives the

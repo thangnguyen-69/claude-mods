@@ -85,10 +85,17 @@ Unchanged and outside this change. The evidence says it is not reachable here:
 | Mutter producer `dataType` | `4` | MemFd only — no `DmaBuf` bit (8) |
 | Immersed consumer `dataType` | `6` | MemPtr\|MemFd — no `DmaBuf` bit |
 | Immersed fd count | 0 dmabuf / 16 memfd | frames are copied through RAM |
-| `kDmaBufMinVersion` in the binary | `0` | Immersed imposes no version gate |
+| `kDmaBufMinVersion` in the binary | **3.24** (corrected) | Immersed imposes no blocking version gate; PipeWire 1.0.5 satisfies it |
 
 Mutter 46 chooses the buffer type from whether the negotiated format carries a `modifier` property,
 and it *does* advertise DMA-BUF modifiers here — yet still fixates on `dataType: 4`. That discrepancy
-is the loose end: it is not the PipeWire version (1.0.5 is new enough) and not an Immersed gate. On
-Fedora the same Immersed build negotiates DMA-BUF, so the difference is on the Mutter/compositor side,
-not the app.
+is the loose end: it is **not** the PipeWire version (1.0.5 clears all three gates) and **not** an
+Immersed version gate. **Corrected 2026-11-07: it is not the compositor either.** Mutter 48's
+`meta-screen-cast-stream-src.c` has byte-identical buffer-type logic to 46 (`prop_modifier ?
+1 << SPA_DATA_DmaBuf : 1 << SPA_DATA_MemFd`), and the AppImage here is unpatched (`sha256sum` matches
+the pristine `~/Downloads` copy, so the HEVC patch is not in play). Immersed's capture path does link
+the DMA-BUF code — `StartScreenCastStream` constructs `EglDmaBuf` and calls `QueryDmaBufModifiers`,
+`ProcessBuffer` calls `ImageFromDmaBuf` — so this is a **runtime decline** in the app, not a missing
+capability. Where it declines is not yet known: a `LIBGL_DEBUG=verbose MESA_DEBUG=1` relaunch confirmed
+the debug env reached the process, but EGL does not initialise at `Screen count is 0`, so it produced
+nothing. The probe needs a connected headset to run.
