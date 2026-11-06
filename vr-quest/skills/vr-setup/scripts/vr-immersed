@@ -283,10 +283,31 @@ else
 fi
 # Keep GNOME from locking/suspending while Immersed runs (a lock tears down the
 # virtual monitors and kills zero-copy). One inhibitor per session; it exits with Immersed.
-if command -v gnome-session-inhibit >/dev/null && ! pgrep -f '[g]nome-session-inhibit .*Immersed VR' >/dev/null; then
-  setsid nohup gnome-session-inhibit --app-id immersed --reason "Immersed VR" --inhibit idle:suspend \
-    sh -c 'sleep 30; while pgrep -x Immersed >/dev/null; do sleep 10; done' >/dev/null 2>&1 < /dev/null &
-  echo "Screen lock and suspend held off while Immersed runs."
+#
+# Report the ACTUAL state, not just "I started one this run": on every invocation after the
+# first, the inhibitor already exists and the old code printed nothing, which reads like the
+# protection silently stopped. Query the session manager (idle = flag 8) instead of guessing.
+idle_inhibited() {
+  command -v gdbus >/dev/null || return 1
+  timeout 3 gdbus call --session --dest org.gnome.SessionManager \
+    --object-path /org/gnome/SessionManager \
+    --method org.gnome.SessionManager.IsInhibited 8 2>/dev/null | grep -q true
+}
+if command -v gnome-session-inhibit >/dev/null; then
+  started=0
+  if ! pgrep -f '[g]nome-session-inhibit .*Immersed VR' >/dev/null; then
+    setsid nohup gnome-session-inhibit --app-id immersed --reason "Immersed VR" --inhibit idle:suspend \
+      sh -c 'sleep 30; while pgrep -x Immersed >/dev/null; do sleep 10; done' >/dev/null 2>&1 < /dev/null &
+    started=1
+    sleep 1
+  fi
+  if idle_inhibited; then
+    [ "$started" = 1 ] && echo "Screen lock and suspend held off while Immersed runs." \
+                       || echo "Screen lock and suspend still held off."
+  else
+    echo "WARNING: idle/suspend is NOT inhibited — GNOME can lock and tear down the" >&2
+    echo "         virtual monitors, which costs zero-copy. Check gnome-session-inhibit." >&2
+  fi
 fi
 
 # Opt-in only: re-applying a layout mid-session breaks zero-copy (see RULE above).
