@@ -490,10 +490,21 @@ against a speed test: when they diverge like this, WiFi is not limiting.
 either way; a down/unplugged ethernet port changes nothing. Only the USB cable removes WiFi from
 the path (see §6 transport facts).
 
-**Do not read `iwconfig` "Bit Rate" as the link rate.** On `iwlwifi` it reports a cached legacy
-value — measured `Bit Rate=54 Mb/s` on an 80 MHz 2x2 AX link at -63 dBm that was demonstrably
-passing 188 pkt/s with 0% ping loss. The real rate needs `iw dev <if> station dump`, which is not
-installed by default (`sudo apt install iw`). Interface-level `tx_bytes`/`rx_bytes` in
+**Do not read `iwconfig` "Bit Rate" as the link rate — but do read it as a *before/after* signal.**
+On `iwlwifi` it reports the rate from the last beacon rather than the live negotiated rate, so the
+absolute number is stale and misleading. Measured 2026-11-06 on the same link:
+
+| State | `iwconfig` Bit Rate | Real evidence |
+|---|---|---|
+| power save **on** | `54 Mb/s` (frozen — identical across 6 samples/12 s) | 80 MHz 2x2 AX at -63 dBm, 188 pkt/s, 0% loss |
+| power save **off** | `325 Mb/s` (stable) | same |
+
+So `54 Mb/s` was not a fixed dummy value as first assumed — it *was* the power-saved dozing rate
+being reported. **A frozen Bit Rate that does not move across samples is itself evidence power save
+is on**; 325 Mb/s on an 80 MHz 2x2 AX link is the realistic figure. The authoritative live rate still
+needs `iw dev <if> station dump` (not installed by default; `sudo apt install iw`).
+
+Interface-level `tx_bytes`/`rx_bytes` in
 `/sys/class/net/<if>/statistics/` measure actual throughput and work without root.
 
 **Latency is the WiFi cost, not bandwidth.** Same session, RTT tracked across successive
