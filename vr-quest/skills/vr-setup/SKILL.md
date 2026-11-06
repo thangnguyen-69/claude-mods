@@ -166,7 +166,46 @@ excluded: compositor (Mutter 48 logic identical), PipeWire version gates (all cl
   EGL_LOG_LEVEL=debug` actually reaching the process, Immersed still logs **nothing** about declining
   — and at `Screen count is 0` EGL is not even initialised, so an unconnected probe yields no data.
   Both were tried; do not repeat them.
-- **Next step is disassembly, not logging:** find where `StartScreenCastStream` builds the `Buffers`
+- **ROOT CAUSE FOUND (2026-11-07) — Immersed probes DMA-BUF before EGL is initialised.**
+
+The app builds its `Format`/`Buffers` pods, then initialsises EGL, 17 ms too late:
+
+```
+01:06:26.473  Started screen cast session      <- StartScreenCastStream / BuildFormat
+01:06:26.474  Started screen cast session
+01:06:26.490  Egl initialization succeeded     <- 16-17 ms later
+01:06:26.494  PipeWire stream format changed   <- negotiation happening now
+```
+
+And `eglQueryString(EGL_EXTENSIONS)` on a display that has **not** had `eglInitialize()` returns
+**NULL** — measured on this host:
+
+| state | vendor | extensions | `EGL_EXT_image_dma_buf_import_modifiers` |
+|---|---|---|---|
+| `eglGetDisplay()`, no `eglInitialize` | `None` | **0** | **False** |
+| after `eglInitialize` | `Mesa Project` | 41 | **True** |
+
+So `EglDmaBuf::QueryDmaBufModifiers()` runs against an uninitialised display, the extension check
+fails, it returns zero modifiers, `BuildFormat` emits a format pod with no `modifier` property — and
+Mutter's rule (`prop_modifier ? DmaBuf : MemFd`) then correctly chooses **MemFd**. Immersed never has
+to "decline" anything; it simply never learns DMA-BUF exists.
+
+This explains every prior observation coherently: the code path is linked and would work
+(`QueryDmaBufModifiers` is called; the version gates pass), the EGL sequence works when run *in the
+right order*, the GPU/driver advertise the exact modifier Mutter offers, and the app logs nothing
+because there is no error — just an empty extension list.
+
+- **Why it works on other hosts is not explained by this alone** — it may be a race: if `eglInitialize`
+  happens to complete first on a faster/luckier start, the probe succeeds. Do not claim the fix is
+  "upgrade" or "patch Mutter"; nothing here is host-specific except timing.
+- **It also explains intermittency.** Ordering between `StartScreenCastStream` and EGL init is not
+  sequenced, so a host could get DMA-BUF on one launch and not another. If `vr-stats` shows zero-copy
+  absent, a restart is a lottery ticket rather than a fix, and worth trying before concluding anything.
+- **`XDG_SESSION_TYPE`/auth matter for reproducing this by hand**: driving EGL from a shell with a
+  stale `XAUTHORITY` makes `eglInitialize` fail outright, which reproduces the "0 extensions" state for
+  the wrong reason. Use the live `-auth` path from `pgrep -af Xwayland`.
+
+**Next step is disassembly, not logging:** find where `StartScreenCastStream` builds the `Buffers`
   pod's `dataType` and what makes it emit `6` (`MemPtr|MemFd`) instead of `14`
   (`MemPtr|MemFd|DmaBuf`). `vr-immersed --restart` changes nothing in the meantime, and until this is
   solved the §13 `(0,0)` guidance is what keeps the readable screen smooth.
