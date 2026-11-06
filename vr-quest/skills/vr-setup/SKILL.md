@@ -296,6 +296,64 @@ L=$(ls -t ~/.Immersed/Logs/*.txt | head -1)
 | `TotalFrame`/`TotalBytes` not advancing across two blocks | genuine stall |
 | all screens at `(0, 0)` | layout collapsed (dead session, not a config fault) |
 | `received key frame request for N` repeated | headset asking for a usable frame |
+| `Session creation inhibited` + `Screen count is 0` | stuck screen lock, not a stream fault — see below |
+
+### `Session creation inhibited` — a stuck screen lock, not Immersed
+
+Every connect fails immediately and no Screen Info block is ever emitted:
+
+```
+Failed to create remote desktop session: GDBus.Error:org.freedesktop.DBus.Error.Failed: Session creation inhibited
+Screen count is 0
+```
+
+This is **Mutter refusing all screen-cast sessions**, and restarting Immersed will never fix it.
+Confirm it without Immersed in the loop:
+
+```bash
+gdbus call --session --dest org.gnome.Mutter.RemoteDesktop \
+  --object-path /org/gnome/Mutter/RemoteDesktop \
+  --method org.gnome.Mutter.RemoteDesktop.CreateSession    # same error = not an Immersed problem
+```
+
+Cause: gnome-shell inhibits remote access whenever the session mode is not `user`
+(`js/ui/main.js`: `if (!sessionMode.allowScreencast) remoteAccessController.inhibit_remote_access()`).
+Only `user` sets `allowScreencast: true`; `unlock-dialog` inherits `false`. So a lock that started
+but never completed — leaving the shell in `unlock-dialog` — blocks every cast until it finishes.
+
+Diagnose from the two sources disagreeing (measured 2026-11-05):
+
+```bash
+SID=$(loginctl show-user "$USER" -p Display --value)   # $XDG_SESSION_ID is often UNSET in agent shells
+loginctl show-session "$SID" -p LockedHint             # yes
+gdbus call --session --dest org.gnome.ScreenSaver --object-path /org/gnome/ScreenSaver \
+  --method org.gnome.ScreenSaver.GetActive                # (false,)  <- claims unlocked
+gdbus call --session --dest org.gnome.ScreenSaver --object-path /org/gnome/ScreenSaver \
+  --method org.gnome.ScreenSaver.GetActiveTime            # non-zero, ~= time since the failed lock
+```
+
+A non-zero `GetActiveTime` while `GetActive` is `false` is the fingerprint: the shield's activation
+time was set and never cleared. Corroborate in the journal at the matching second:
+
+```bash
+journalctl --user --since "<that time>" | grep -i "couldn't lock"
+# gsd-media-keys: Couldn't lock screen: Timeout was reached
+```
+
+**Fix:** finish the lock transition so the mode pops. Either unlock normally (switch to the
+physical console / plug in a monitor and unlock), or force it:
+
+```bash
+gdbus call --session --dest org.gnome.ScreenSaver --object-path /org/gnome/ScreenSaver \
+  --method org.gnome.ScreenSaver.SetActive false    # -> shield.deactivate(false), pops unlock-dialog
+```
+
+The `SetActive false` route is read from source (`MetaScreenShield.deactivate` pops the mode) but
+was **not verified end-to-end** — the session recovered by unlocking at the console first. After the
+mode returns to `user`, the `CreateSession` probe above must stop erroring; only then restart
+Immersed (§7) and press **Connect** in the headset.
+
+### Bitrate is not a stall signal
 
 **Bitrate alone is NOT a stall indicator.** Tens of kbps is normal for a mostly-idle desktop;
 a healthy working stream measured 52 kbps. Two diagnoses were made wrongly on this assumption.
@@ -331,6 +389,122 @@ recorded `immersed_pid` is unreliable. The stable process is what
   connections are account/API traffic.
 - The tunnel is not a bottleneck: during a stall `send-q=0`, `retrans: 0/113`, sub-10ms RTT.
 - Current hosts negotiate **USB 2.0 at 480 Mb/s**. A USB 3 port/cable gives more headroom.
+
+Everything above is **USB only**. When the headset connects over WiFi instead, the transport is
+WebRTC/UDP straight to the Quest's LAN IP — there is no adb reverse, `adb devices` is empty, and
+the errors look completely different (measured 2026-11-06, 5 GHz ch153, 80 MHz, -63 dBm):
+
+| Symptom in log | Meaning |
+|---|---|
+| `stun_port.cc ... UDP send of N bytes to host 192.168.x.y:PORT failed with error 11` | **EAGAIN** — socket send buffer full, frames dropped. Bursty, not constant |
+
+Those `error 11` bursts are the WiFi equivalent of a stall and are **not** a dead stream — the
+`Screen Info` block keeps advancing (measured: 38006 frames, 60 fps encode). Fix order:
+turn WiFi power save off, then move closer to the AP.
+
+On Ubuntu it is **on by default**, and NetworkManager sets it — not the driver. Read all three
+before blaming anything else:
+
+```bash
+iwconfig <if> | grep -i "power management"                  # Power Management:on
+nmcli -f 802-11-wireless.powersave connection show "<SSID>" # 0 (default) = inherit global
+cat /sys/module/iwlwifi/parameters/power_save               # N  = driver is NOT doing it
+grep -r powersave /etc/NetworkManager/conf.d/               # wifi.powersave = 3  <- the cause
+```
+
+Per-network (survives reboot, small blast radius, `powersave 0` undoes it):
+
+```bash
+nmcli connection modify "<SSID>" 802-11-wireless.powersave 2   # 2 = disable
+nmcli connection up "<SSID>"
+```
+
+Globally, to undo the Ubuntu default:
+`sudo sed -i 's/wifi.powersave = 3/wifi.powersave = 2/' /etc/NetworkManager/conf.d/default-wifi-powersave-on.conf`
+then `sudo systemctl restart NetworkManager` (this drops the link for a few seconds).
+
+**Editing that file alone does nothing — the restart is mandatory.** NetworkManager reads
+`conf.d/*.conf` only at startup and keeps the old value in memory indefinitely. Measured
+2026-11-06: file changed to `wifi.powersave = 2`, `systemctl restart` not run, and the interface
+still reported `Power Management:on` an hour later while `nmcli` showed `0 (default)` — inheriting
+the stale in-memory `3`. Check the daemon start time before concluding a setting failed:
+
+```bash
+ps -eo pid,lstart,cmd | grep -E 'NetworkManager( |$)' | grep -v grep   # older than your edit?
+iwconfig <if> | grep -i "power management"                             # want: off
+```
+
+Note the driver param `/sys/module/iwlwifi/parameters/power_save` reads `N` in this situation — it
+tracks the module parameter, **not** NM's per-interface setting, so it cannot confirm or refute
+this. Trust only `iwconfig`'s `Power Management` line.
+
+Also: a burst of `error 11` can stop on its own. Measured here, 0 new EAGAIN in the 30 min after
+10:10 with power save still on — so a quiet log is **not** proof the power-save change worked.
+Judge it by whether the `RTT:` series across `Screen Info` blocks comes down, sampling repeatedly
+over at least 20 min — never by one early sample, and never by absence of errors.
+
+Measured result of actually disabling it (2026-11-06, same session, NetworkManager restarted at
+10:47:33; RTT sampled one pair per `Screen Info` block):
+
+```
+before  10:14 29   10:18 34   10:23 12   10:28 16   10:33 6   10:38 6   10:43 10   mean ~16, max 34
+after   10:48 4    10:53 4    10:58 5    11:03 22   11:08 5   11:13 7             mean ~8,  max 22
+```
+
+Power save off **roughly halved the mean RTT and lowered the ceiling, but did not flatten it** — a
+22 ms spike appeared 16 min after the change, with **no** `error 11`/`101` in the log at that moment.
+So: real improvement, partial fix. Do not record it as "flat"; an early pair of 4 ms samples is not
+a trend, and re-sampling later is what caught this.
+
+**Residual jitter is below Immersed.** Concurrently, `ping <gateway>` reported `min/avg/max/mdev =
+1.9/4.5/16.3/3.4 ms` — the laptop ↔ router hop is itself spiky while Immersed is idle-ish. So once
+power save is off, chase the remaining variance at the radio/AP level (airtime contention, -59 dBm
+signal, neighbours on the same channel), not in Immersed or its config.
+
+**Expect `stun_port.cc ... failed with error 101` for a moment after the restart.** `101` is
+`ENETUNREACH`, not `11`. Measured 10 bursts in the ~10 s window while the link re-DHCP'd, then it
+stopped. Harmless and self-clearing — do not chase it as a new fault.
+
+### What the VR stream actually costs on the link
+
+Do **not** quote `Screen Info`'s `Bitrate:` as network usage — it is the encoder's instantaneous rate
+for a near-static desktop and understates the wire cost about 4×. Measured on one session:
+
+| Where | Value |
+|---|---|
+| `Screen Info` `Bitrate` (2 screens, idle desktop) | 587–636 kbps |
+| **Actual `wlp4s0` TX with VR streaming** | **~2.2 Mbit/s** |
+| Actual TX during a big download | 13.9 Mbit/s |
+| Idle background RX (onedrive, sync daemons) | 92 kbit/s |
+
+Always measure with
+`cat /sys/class/net/<if>/statistics/{rx,tx}_bytes` across a known interval — no root needed.
+
+**Immersed over WiFi does not meaningfully slow the internet.** Same host, VR streaming live:
+WAN delivered **70.8–75.2 Mbit/s** across four samples while the radio received **437.8 Mbit/s** —
+the link had ~6× headroom over the WAN, so the ISP/router is the cap, not WiFi. The VR stream is
+~3% of WAN capacity. If you need to *prove* WiFi is not the constraint, compare NIC `rx_bytes` rate
+against a speed test: when they diverge like this, WiFi is not limiting.
+
+**Wired will not rescue this.** The costly hop is laptop → router → Quest, and the Quest is on WiFi
+either way; a down/unplugged ethernet port changes nothing. Only the USB cable removes WiFi from
+the path (see §6 transport facts).
+
+**Do not read `iwconfig` "Bit Rate" as the link rate.** On `iwlwifi` it reports a cached legacy
+value — measured `Bit Rate=54 Mb/s` on an 80 MHz 2x2 AX link at -63 dBm that was demonstrably
+passing 188 pkt/s with 0% ping loss. The real rate needs `iw dev <if> station dump`, which is not
+installed by default (`sudo apt install iw`). Interface-level `tx_bytes`/`rx_bytes` in
+`/sys/class/net/<if>/statistics/` measure actual throughput and work without root.
+
+**Latency is the WiFi cost, not bandwidth.** Same session, RTT tracked across successive
+`Screen Info` blocks climbed `4 → 5 → 5 → 6 → 7 → 8 → 8 → 12 → 20 → 29 → 34 ms` (USB hosts stayed
+sub-10 ms). Real wire cost was ~2.2 Mbit/s against a 16 Mbit/s cap — an idle desktop compresses to
+almost nothing, so *bandwidth is never the constraint* on WiFi; latency and buffer overruns are.
+
+**An internet speed test is not a link measurement, and this one was wrong twice.** First measured
+10.3 Mbit/s, then 70.8–75.2 Mbit/s on the same link later the same hour with no config change in
+between — most likely transient congestion or TCP state, unverified. Do not draw conclusions from a
+single WAN sample, and never use it to infer the WiFi rate (see the `rx_bytes` comparison above).
 
 ## 7. Restarting Immersed
 
@@ -447,6 +621,8 @@ raising `LocalMaxBitrate` is the free quality win.
 - Do not claim the headset reconnects by itself — it does not.
 - Do not claim a `ApplyMonitorsConfig` layout survives a reconnect — it does not.
 - Do not use bitrate as proof of a freeze.
+- Do not claim a restart fixes `Session creation inhibited` — it is a shell session-mode state, and
+  Immersed is not the culprit.
 - Before asserting a cause, line up event timestamps: `journalctl --user --since` for exact
   seconds, and re-read a `Screen Info` block only if its timestamp is newer than the change.
   Several wrong diagnoses were made by skipping this.
