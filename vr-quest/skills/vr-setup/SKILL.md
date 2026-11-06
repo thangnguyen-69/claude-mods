@@ -975,10 +975,62 @@ GDM greeter (a separate gdm-uid session) survived, and every app the user had op
 - **Signal 6 is `abort()`**, i.e. typically an assertion failure — consistent with the documented
   `meta_monitor_mode_foreach_crtc` ← `sync_cursor_state` crash path on monitor-set changes while a
   screencast/virtual-monitor set is live.
-- **The crash context is often unrecoverable afterwards.** After the session dies, `journalctl --user
-  -b` no longer holds that session's records, `journalctl -b` for the window may return nothing,
-  `coredumpctl list` may be empty, and there may be no kernel segfault line. If you need the cause,
-  capture `journalctl --user -b -n 200` **before** logging back in.
+
+### The reproducible crash: Immersed segfaults in libwayland-client, then the shell aborts
+
+**Seen twice with an identical signature** (2026-11-03 00:27:22 and 2026-11-07 00:06:29, both
+Ubuntu 24.04 / Mutter 46.2 / 780M), so treat this as a real, repeatable path rather than bad luck:
+
+```
+kernel: Immersed[PID]: segfault at 40 ip ... error 4 in libwayland-client.so.0.22.0[6fb4,...]
+gnome-shell[PID]: D-Bus client with active sessions vanished
+gnome-shell[PID]: Removed virtual monitor Meta-0     # and Meta-1, Meta-2 ...
+gnome-shell[PID]: libmutter:ERROR:../src/core/window.c:5957:
+                  meta_window_get_work_area_for_logical_monitor: assertion failed: (logical_monitor)
+gnome-shell[PID]: GNOME Shell crashed with signal 6
+#0  tiling-assistant@ubuntu.com/src/extension/tilingWindowManager.js:99
+#1  tiling-assistant@ubuntu.com/src/extension/tilingWindowManager.js:1303
+#2  tiling-assistant@ubuntu.com/src/extension/tilingWindowManager.js:437
+```
+
+The whole chain takes **~80 ms** (measured `short-iso-precise`): the segfault is at `:29.246`, the
+virtual monitors are removed at `:29.291`, the assertion fires and the shell aborts at `:29.319`.
+There is no time to intervene.
+
+**The discriminator is whether virtual monitors are live.** Same segfault, opposite outcome
+(2026-11-02 22:33:06): with **`Expected Screen Count: 1`** — no virtual display up — Immersed died
+alone, gnome-shell logged `D-Bus client with active sessions vanished`, and **the same shell pid kept
+running**. It only aborted on the two occasions when `Meta-*` monitors were live and had to be torn
+down. So the assertion is in the virtual-monitor teardown path, and Tiling Assistant is the caller
+(`tilingWindowManager.js:1303` → `:437`), not necessarily the cause: `meta_window_get_work_area_for_logical_monitor`
+has no logical monitor to return *because* the monitors are already gone.
+
+- **Practical consequence:** any Immersed death while streaming — crash, `pkill`, a config rewrite
+  that restarts it — can take the session wholesale. That is the existing warning below, now with a
+  concrete mechanism and a repeat rate.
+- **Mitigation is not established.** Disabling Tiling Assistant is the obvious experiment (it is the
+  frame that calls into the failing assertion) but has **not been tested**; do not present it as a fix.
+  Note it is stock Ubuntu (`gnome-shell-extension-ubuntu-tiling-assistant`), not something added here,
+  and that this skill *recommends* it for VR tiling (see the tiling note in the memory/docs), so
+  removing it has its own cost.
+- **This is a third distinct crash signature from `meta_monitor_mode_foreach_crtc` ←
+  `sync_cursor_state`** described above. Both produce signal 6; check the stack frame before assuming
+  which one you hit.
+
+### What survives a crash, and what does not — corrected 2026-11-07
+
+The earlier claim that there "may be no kernel segfault line" is **wrong for this path**, and the
+distinction matters when you go looking for the cause:
+
+| Source | After the crash |
+|---|---|
+| `journalctl -k -b \| grep segfault` | **survives** (3 records still present, incl. the old sessions) |
+| `journalctl --user -b` filtered to the dead shell pid | **gone** — 0 records; the user journal for that session is not retained |
+| `coredumpctl` | **not installed here** (`command not found`) — do not tell the user to run it |
+
+So on this host the *kernel* line is the reliable forensic trail and the *user-session* context is
+the part that vanishes. If you need the shell's own messages, capture `journalctl --user -b -n 200`
+**before** logging back in — that advice still holds.
 - **Tell the user the real cost before stopping the agent.** "You'll need to press Connect again"
   understates it. Say plainly that a restart with virtual displays live can log them out and close
   everything, and that only a config file survives — their open work does not. If they are mid-task
@@ -1543,6 +1595,14 @@ accepts to keep zero-copy; applying one mid-session is a cause of stutter, not a
 - Do not describe stopping the agent as merely "you'll need to press Connect again". With virtual
   displays live it can log the user out and destroy their open work (see §11). State that risk
   explicitly before acting, and defer if they are mid-task or have no display attached.
+- **Immersed dying while virtual monitors are live is the trigger, not just the restart.** Measured
+  twice with the same signature: a segfault in `libwayland-client` → `Removed virtual monitor Meta-*`
+  → `meta_window_get_work_area_for_logical_monitor` assertion → gnome-shell `signal 6`, all in ~80 ms.
+  With no virtual display up (`Expected Screen Count: 1`) the same segfault was harmless. So do not
+  casually `pkill` or restart Immersed mid-session, and do not promise a clean recovery from one.
+- Do not tell the user to run `coredumpctl` on this host — it is not installed. And do not claim the
+  crash context is entirely lost: the **kernel** `segfault` line survives in `journalctl -k`, only the
+  dead session's `journalctl --user` records are gone (see §11).
 - Do not present resolution reduction as a CPU fix. **Measured: cutting 18.8% of pixel throughput
   saved 0.0 cores** (1.77 → 1.80). Cost is per-frame bookkeeping, not per-pixel. Resolution *is* the
   right fix for encoder saturation during animated content (see §9).

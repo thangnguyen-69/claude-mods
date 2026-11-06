@@ -127,6 +127,19 @@ apply_profile() {
   local name=$1 file="$PROFILES/$1.profile"
   [ -f "$file" ] || { echo "No profile '$name'. Saved: $(ls "$PROFILES" 2>/dev/null | sed 's/\.profile$//' | tr '\n' ' ')" >&2; exit 1; }
   if pgrep -x Immersed >/dev/null; then
+    # Virtual monitors live + Immersed dying is the documented session-crash path:
+    # segfault in libwayland-client -> "Removed virtual monitor Meta-*" ->
+    # meta_window_get_work_area_for_logical_monitor assertion -> gnome-shell signal 6,
+    # all in ~80 ms, taking every open app with it. Seen twice with that exact signature.
+    # Warn rather than block: applying a profile is sometimes the only way forward.
+    # Only the CURRENT section counts: the "desired:" block always names Meta-* even
+    # when no virtual monitor exists, so grepping the whole output false-positives.
+    if command -v vr-layout >/dev/null &&
+       vr-layout show 2>/dev/null | sed -n '1,/^desired:/p' | grep -qE '^\s+Meta-'; then
+      echo "WARNING: virtual monitors are live. Stopping Immersed now can crash the" >&2
+      echo "         whole GNOME session (segfault -> Removed virtual monitor -> signal 6)," >&2
+      echo "         closing every open app. Disconnect the headset first if you can." >&2
+    fi
     echo "Stopping Immersed to apply '$name' (it rewrites its config on exit)..."
     pkill -x Immersed
     for _ in $(seq 1 20); do pgrep -x Immersed >/dev/null || break; sleep 0.5; done
