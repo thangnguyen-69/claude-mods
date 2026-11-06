@@ -122,8 +122,18 @@ if pgrep -x Immersed >/dev/null; then
           printf "\n"
         }
       }' "$L"
-    echo "  note: (x,y) is Immersed's own offset; the stream at (0,0) is the smooth one, and the"
-    echo "        physical screen's offset is not a freeze signal. Low bitrate = little motion, not a fault."
+    echo "  note: (x,y) is Immersed's own offset, not a freeze signal. Low bitrate = little motion, not a fault."
+    echo "        With zero-copy OK every screen can be smooth; without it only the (0,0) one is."
+    pid=$(pgrep -x Immersed | head -1)
+    nd=$(ls -l /proc/$pid/fd 2>/dev/null | grep -c dmabuf)
+    if grep -q -E 'Failed to query DMA-BUF|EGL_NOT_INITIALIZED' "$L"; then
+      echo "  ZERO-COPY: LOST this session (RAM-copy fallback: more memory, non-origin screens may judder,"
+      echo "             a reconnect can kill a stream). Fix: vr-immersed --restart, then don't move screens."
+    elif [ "$nd" -gt 0 ]; then
+      echo "  zero-copy: OK ($nd DMA-BUF buffers)"
+    else
+      echo "  zero-copy: unknown (no DMA-BUF buffers seen yet)"
+    fi
     errs=$(grep -c -E 'PipeWire (stream state|remote) error' "$L")
     [ "$errs" -gt 0 ] && echo "  WARNING: $errs PipeWire stream error(s) this session; last: $(grep -E 'PipeWire (stream state|remote) error' "$L" | tail -1 | cut -c12-19). A frozen screen = reconnect in the headset."
   fi

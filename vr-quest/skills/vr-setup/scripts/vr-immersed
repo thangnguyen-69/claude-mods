@@ -7,12 +7,16 @@
 #   vr-immersed --link home   link the current Wi-Fi network to the "home" profile
 #   vr-immersed --list        list saved profiles and Wi-Fi links
 #   vr-immersed --stop        quit Immersed (laptop + headset) and turn the laptop screen back on
+#   vr-immersed --restart     fresh agent process: the fix for a frozen/juddering screen
+#                             or lost zero-copy (vr-stats shows it); then press Connect
 #   --keep-screen             with a start: leave the laptop backlight on
+#   --watch                   with a start: also run `vr-layout watch` (NOT recommended)
 #
-# Screen layout: if this machine has a layout saved for the active profile
-# (`vr-layout save-desired <profile>` -> ~/.config/vr-layouts/hosts/<hostname>/),
-# a background `vr-layout watch` re-applies it after every headset Connect.
-# Log: ~/.local/state/vr-layout-watch.log
+# RULE: do not change the GNOME screen layout while Immersed is streaming. Any
+# mid-session layout change makes Immersed lose DMA-BUF zero-copy for the rest of
+# that process; then streams fall back to RAM copies, non-origin screens judder,
+# and a later reconnect can kill a stream. Keep Mutter's default packing and
+# arrange the screens in VR instead. So the layout watcher is opt-in (--watch).
 #
 # Starting turns the laptop backlight off (the panel keeps running, so it still
 # shows in VR); the brightness key or `vr-immersed --stop` brings it back.
@@ -132,8 +136,11 @@ EOF
 }
 
 KEEP_SCREEN=0
+WATCH=0
 args=()
-for a in "$@"; do [ "$a" = --keep-screen ] && KEEP_SCREEN=1 || args+=("$a"); done
+for a in "$@"; do
+  case "$a" in --keep-screen) KEEP_SCREEN=1 ;; --watch) WATCH=1 ;; *) args+=("$a") ;; esac
+done
 set -- "${args[@]+"${args[@]}"}"
 
 case "${1:-}" in
@@ -145,7 +152,13 @@ case "${1:-}" in
   --link) [ -n "${2:-}" ] || { echo "usage: vr-immersed --link NAME" >&2; exit 2; }; link_place "$2"; exit 0 ;;
   --list) echo "Profiles:"; ls "$PROFILES" 2>/dev/null | sed -n 's/\.profile$//p' | sed 's/^/  /'
           echo "Wi-Fi links:"; sed 's/^/  /' "$PLACES" 2>/dev/null; exit 0 ;;
-  -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+  --restart)
+    if pgrep -x Immersed >/dev/null; then
+      pkill -x Immersed
+      for _ in $(seq 1 20); do pgrep -x Immersed >/dev/null || break; sleep 0.5; done
+      echo "Immersed agent stopped; starting a fresh one."
+    fi ;;
+  -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
   "")
     ssid=$(current_ssid); auto=$(profile_for_ssid "$ssid")
     if [ -n "$auto" ]; then
@@ -171,11 +184,13 @@ if adb get-state >/dev/null 2>&1; then
 else
   echo "Headset not on USB/adb; open Immersed on the headset yourself and press Connect."
 fi
-# Keep this machine's layout for the active profile across headset connects.
+# Opt-in only: re-applying a layout mid-session breaks zero-copy (see RULE above).
 prof=$(current_profile)
 layout_file="$HOME/.config/vr-layouts/hosts/$(uname -n)/${prof:-default}.json"
 vr_layout=$(command -v vr-layout || echo "$(dirname "$0")/vr-layout")
-if [ -f "$layout_file" ] && [ -x "$vr_layout" ]; then
+if [ "$WATCH" = 0 ]; then
+  :
+elif [ -f "$layout_file" ] && [ -x "$vr_layout" ]; then
   mkdir -p "$HOME/.local/state"
   setsid nohup "$vr_layout" watch "${prof:-default}" >> "$HOME/.local/state/vr-layout-watch.log" 2>&1 < /dev/null &
   echo "Layout watcher: re-applies '${prof:-default}' after each Connect ($layout_file)."

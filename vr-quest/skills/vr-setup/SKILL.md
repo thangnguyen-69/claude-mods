@@ -45,6 +45,35 @@ done
 The Immersed scripts need **system** `/usr/bin/python3` with `gi` (GObject introspection). A conda/pyenv python
 usually has no `gi` — do not switch interpreters. The shebang already points at `/usr/bin/python3`.
 
+## THE RULE: keep zero-copy — never change the screen layout while Immersed streams
+
+Confirmed 2026-11-06 (Fedora 42, GNOME 48, Intel UHD i5-1335U, Immersed Linux 11.0):
+
+- On a **fresh** Immersed process the capture uses DMA-BUF zero-copy (`vr-stats` → `zero-copy: OK`).
+- **Any** mid-session Mutter layout change — `vr-layout apply`, the layout watcher, GNOME Settings →
+  Displays, or Immersed applying an origin from the headset — makes PipeWire renegotiate, and Immersed's
+  WebRTC-derived EGL path then fails (`Failed to query DMA-BUF formats`, `EGL_NOT_INITIALIZED`, dropping
+  modifiers 2/1/0/-1, `no more input formats`). Zero-copy is gone **for the rest of that process**; frames
+  are copied through RAM. Immersed uses system Mesa/libva — not a bundled-library problem; it is an
+  Immersed bug.
+- In the RAM-copy fallback: ~1.5–2 GB more shared memory (looks like a leak), ~+0.3 core gnome-shell,
+  **non-origin screens judder** (the "only `(0,0)` is smooth" effect below), and a later headset
+  reconnect can **kill a stream permanently** (observed 3 times in one hour). Reconnect does not heal it;
+  only a fresh process (`vr-immersed --restart`) does.
+- With zero-copy intact, a screen **not** at `(0,0)` (ultrawide at `(1920,0)`) was confirmed smooth by the
+  user. Immersed's own CPU did **not** change between modes (~2–3 cores; its encoder sends ~60 fps
+  regardless of the FPS cap) — zero-copy is about memory, smoothness and stability, not Immersed CPU.
+
+So: start with `vr-immersed`, keep Mutter's default packing, arrange screens **in VR** only, and never
+script layout changes during a session. Multiple screens are fine as long as zero-copy holds (watch GPU
+busy in `vr-stats`). The layout watcher (`vr-layout watch`) is opt-in (`vr-immersed --watch`) and not
+recommended. `~/.config/monitors.xml` cannot pre-place a virtual screen either: Mutter gives `Meta-*` a new
+serial on every connect, so stored configs never match.
+
+The sections below on `(0,0)` smoothness and layouts were written before this was known; on hosts where
+zero-copy holds they mostly don't apply. Unverified on the AMD host — check its logs for
+`Failed to query DMA-BUF` before assuming the same.
+
 ## Health check: run `vr-stats` first
 
 When the user asks "how is it running", for CPU/GPU/memory/temperature/bandwidth/fps, or whether something
@@ -328,8 +357,9 @@ vr-layout save-desired home-wide      # -> hosts/$(uname -n)/home-wide.json
 vr-layout show home-wide              # prints which file it will use
 ```
 
-`vr-immersed` detects the active profile (the one whose `VDData` matches `~/.ImmersedConf`) and, if this
-host has a layout for it, starts `vr-layout watch <profile>` in the background (log:
+**Superseded — see THE RULE at the top: re-applying a layout mid-session breaks zero-copy. The watcher is
+now opt-in (`vr-immersed --watch`).** With `--watch`, `vr-immersed` detects the active profile (the one whose
+`VDData` matches `~/.ImmersedConf`) and, if this host has a layout for it, starts `vr-layout watch <profile>` in the background (log:
 `~/.local/state/vr-layout-watch.log`). The watcher re-applies the layout ~3 s after the monitor **set**
 changes to the one the layout describes (= a headset Connect), re-checks once within 15 s in case Immersed
 repacks again, never more than twice per Connect, and ignores plain moves so a manual rearrangement in GNOME
@@ -1173,7 +1203,11 @@ cost — "content arrives late" vs "Immersed's conversion is slow".
 framebuffer / first stream) while other streams do offset reads and per-row realignment; or the first
 stream gets a decoder/pipeline resource the others do not. Do not state a mechanism — state the observation.
 
-**What works today:** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
+**Update 2026-11-06: this is most likely a symptom of the RAM-copy fallback (lost zero-copy), not a rule —
+see THE RULE at the top. With zero-copy intact a non-origin screen was smooth. Fix the zero-copy first
+(`vr-immersed --restart`, no layout changes) before rearranging anything.**
+
+**What works today (without zero-copy):** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
 
 **Moving the physical panel off the origin can work — confirmed 2026-11-06** (Fedora 42, GNOME 48, Intel
 UHD, laptop `eDP-1` + one 2560x1080 virtual). Applied mid-session: `Meta-0` ultrawide at `(0,0)`, `eDP-1` at
