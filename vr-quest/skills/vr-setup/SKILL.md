@@ -139,12 +139,37 @@ by PipeWire 1.0.5, so there is no version gate. Its capture path *does* link the
 `ImageFromDmaBuf`), so this is a **runtime decline**, not a missing capability.
 
 **Do not call it structural.** An earlier version of this section did, and it was wrong twice over
-(it also read the version gates as `0`, from 4 bytes of a 12-byte struct). What is established is
-only the *symptom*: on this host DMA-BUF is not negotiated, so `vr-immersed --restart` changes
-nothing and the §13 `(0,0)` guidance still applies. Where the negotiation is declined is unknown —
-Immersed logs nothing about the decision. A safe next step (no headset connected, so no `Meta-*`
-monitors live and the §11 crash path cannot fire) is to relaunch with `LIBGL_DEBUG=verbose
-MESA_DEBUG=1` and see where the DMA-BUF path bails. Narrow any claim to what was measured.
+(it also read the version gates as `0`, from 4 bytes of a 12-byte struct).
+
+**The GPU/driver is RULED OUT — proved 2026-11-07 with a direct EGL probe.** Opening
+`/dev/dri/renderD128` via GBM and initialising EGL on radeonsi gives:
+
+```
+EGL 1.5 initialised on radeonsi (driver amdgpu, pci 1002:15bf)
+EGL_EXT_image_dma_buf_import              YES
+EGL_EXT_image_dma_buf_import_modifiers    YES
+EGL_MESA_image_dma_buf_export             YES
+eglQueryDmaBufFormatsEXT -> 64 formats
+ARGB8888/BGRA modifiers: 0x020000001046bb04, 0x0200000010467b04, ... , 0x0 (LINEAR)
+```
+
+Mutter's `alt1` modifier is `0x20000001046bb04` — **the same value this EGL lists first**. So the
+format Mutter offers is importable here with the exact modifier, and the app simply never offers
+`SPA_DATA_DmaBuf` on its consumer `Buffers` param. Everything except Immersed's own decision is
+excluded: compositor (Mutter 48 logic identical), PipeWire version gates (all cleared), the AppImage
+(sha256 matches upstream), the GPU and Mesa.
+
+- **`No DRI config supports native format PIPE_FORMAT_*_UNORM` in the log is a RED HERRING.** Mesa
+  prints it while filtering candidate formats during init; the initialisation then succeeds on
+  radeonsi. Do not read it as a driver failure.
+- **A debug relaunch tells you nothing extra.** With `LIBGL_DEBUG=verbose MESA_DEBUG=1
+  EGL_LOG_LEVEL=debug` actually reaching the process, Immersed still logs **nothing** about declining
+  — and at `Screen count is 0` EGL is not even initialised, so an unconnected probe yields no data.
+  Both were tried; do not repeat them.
+- **Next step is disassembly, not logging:** find where `StartScreenCastStream` builds the `Buffers`
+  pod's `dataType` and what makes it emit `6` (`MemPtr|MemFd`) instead of `14`
+  (`MemPtr|MemFd|DmaBuf`). `vr-immersed --restart` changes nothing in the meantime, and until this is
+  solved the §13 `(0,0)` guidance is what keeps the readable screen smooth.
 
 The sections below on `(0,0)` smoothness and layouts were written before this was known; on hosts where
 zero-copy holds they mostly don't apply.

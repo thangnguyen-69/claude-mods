@@ -1,0 +1,137 @@
+#!/usr/bin/python3 -I
+"""Does this box's EGL expose DMA-BUF import + format modifiers?
+
+    vr-dmabuf            # probe /dev/dri/renderD128
+    vr-dmabuf renderD129 # or an explicit node
+
+Read-only: opens the render node via GBM, initialises EGL on the real driver,
+and enumerates the DMA-BUF formats/modifiers it actually advertises. Touches
+nothing else — no Immersed, no session.
+
+Why it matters: if this prints the modifiers Mutter offers, then the host CAN do
+zero-copy and any failure to negotiate it is the *client's* decision. That is how
+the 2026-11-07 investigation ruled out the GPU and Mesa (radeonsi advertised
+0x020000001046bb04, the exact value Mutter's alt1 offers) and localised the
+refusal inside Immersed. See SKILL.md, THE RULE / section 9.
+"""
+import ctypes, ctypes.util, os, sys
+
+EGL_PLATFORM_GBM_KHR = 0x31D7
+EGL_EXTENSIONS = 0x3055
+EGL_NO_DISPLAY = ctypes.c_void_p(0)
+EGL_NO_CONTEXT = ctypes.c_void_p(0)
+
+DRM_FORMAT_ARGB8888 = 0x34325241  # 'AR24' - BGRA in memory order for little endian
+DRM_FORMAT_XRGB8888 = 0x34325258  # 'XR24' - BGRx
+
+egl = ctypes.CDLL("libEGL.so.1")
+gbm = ctypes.CDLL("libgbm.so.1")
+
+gbm.gbm_create_device.restype = ctypes.c_void_p
+gbm.gbm_create_device.argtypes = [ctypes.c_int]
+
+egl.eglGetPlatformDisplay.restype = ctypes.c_void_p
+egl.eglGetPlatformDisplay.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+egl.eglGetPlatformDisplayEXT = egl.eglGetPlatformDisplay
+egl.eglGetPlatformDisplayEXT.restype = ctypes.c_void_p
+egl.eglGetPlatformDisplayEXT.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+
+egl.eglInitialize.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+                              ctypes.POINTER(ctypes.c_int)]
+egl.eglQueryString.restype = ctypes.c_char_p
+egl.eglQueryString.argtypes = [ctypes.c_void_p, ctypes.c_int]
+egl.eglGetProcAddress.restype = ctypes.c_void_p
+egl.eglGetProcAddress.argtypes = [ctypes.c_char_p]
+egl.eglGetError.restype = ctypes.c_int
+
+node = sys.argv[1] if len(sys.argv) > 1 else "/dev/dri/renderD128"
+if not node.startswith("/"):
+    node = "/dev/dri/" + node
+try:
+    fd = os.open(node, os.O_RDWR)
+except OSError as e:
+    print(f"FAIL open {node}: {e}")
+    sys.exit(1)
+print(f"opened {node} fd={fd}")
+
+dev = gbm.gbm_create_device(fd)
+if not dev:
+    print("FAIL gbm_create_device")
+    sys.exit(1)
+print(f"gbm device ok: {hex(dev)}")
+
+dpy = egl.eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_KHR, ctypes.c_void_p(dev), None)
+if not dpy:
+    print(f"FAIL eglGetPlatformDisplayEXT, err={hex(egl.eglGetError())}")
+    sys.exit(1)
+print(f"EGLDisplay = {hex(dpy)}")
+
+maj = ctypes.c_int(); mnr = ctypes.c_int()
+if not egl.eglInitialize(dpy, ctypes.byref(maj), ctypes.byref(mnr)):
+    print(f"FAIL eglInitialize err={hex(egl.eglGetError())}")
+    sys.exit(1)
+print(f"EGL {maj.value}.{mnr.value} initialised\n")
+
+ext = (egl.eglQueryString(dpy, EGL_EXTENSIONS) or b"").decode()
+want = [
+    "EGL_EXT_image_dma_buf_import",
+    "EGL_EXT_image_dma_buf_import_modifiers",
+    "EGL_KHR_platform_gbm",
+    "EGL_MESA_image_dma_buf_export",
+]
+print("relevant EGL client extensions:")
+for w in want:
+    print(f"  {'YES' if w in ext else 'no ':3}  {w}")
+print(f"\n(all extensions: {len(ext.split())})")
+
+if "EGL_EXT_image_dma_buf_import_modifiers" not in ext:
+    print("\n=> modifiers extension NOT exposed: a client cannot negotiate DRM modifiers.")
+    sys.exit(0)
+
+# Correct signatures (spec):
+#   eglQueryDmaBufFormatsEXT(dpy, max_formats, formats, num_formats)
+#   eglQueryDmaBufModifiersEXT(dpy, format, max_modifiers, modifiers, external_only, num_modifiers)
+QueryFormats = ctypes.CFUNCTYPE(
+    ctypes.c_uint, ctypes.c_void_p, ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))(
+    ctypes.cast(egl.eglGetProcAddress(b"eglQueryDmaBufFormatsEXT"), ctypes.c_void_p).value)
+QueryMods = ctypes.CFUNCTYPE(
+    ctypes.c_uint, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+    ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))(
+    ctypes.cast(egl.eglGetProcAddress(b"eglQueryDmaBufModifiersEXT"), ctypes.c_void_p).value)
+
+n = ctypes.c_int(0)
+if not QueryFormats(dpy, 0, None, ctypes.byref(n)):
+    print(f"FAIL eglQueryDmaBufFormatsEXT(count) err={hex(egl.eglGetError())}")
+    sys.exit(1)
+arr = (ctypes.c_int * n.value)()
+got = ctypes.c_int(0)
+if not QueryFormats(dpy, n.value, arr, ctypes.byref(got)):
+    print(f"FAIL eglQueryDmaBufFormatsEXT(list) err={hex(egl.eglGetError())}")
+    sys.exit(1)
+fmts = list(arr[:got.value])
+print(f"\neglQueryDmaBufFormatsEXT -> {n.value} formats")
+for f in sorted(fmts):
+    tag = {DRM_FORMAT_ARGB8888: "ARGB8888 (BGRA)", DRM_FORMAT_XRGB8888: "XRGB8888 (BGRx)"}.get(f, "")
+    print(f"  0x{f:08x} {tag}")
+
+for target, name in ((DRM_FORMAT_ARGB8888, "ARGB8888/BGRA"), (DRM_FORMAT_XRGB8888, "XRGB8888/BGRx")):
+    if target not in fmts:
+        print(f"\n{name}: NOT in the supported format list")
+        continue
+    cnt = ctypes.c_int(0)
+    QueryMods(dpy, target, 0, None, None, ctypes.byref(cnt))
+    if cnt.value == 0:
+        print(f"\n{name}: 0 modifiers")
+        continue
+    mods = (ctypes.c_uint64 * cnt.value)()
+    ext2 = (ctypes.c_int * cnt.value)()
+    got2 = ctypes.c_int(0)
+    QueryMods(dpy, target, cnt.value, mods, ext2, ctypes.byref(got2))
+    vals = list(mods[:got2.value])
+    print(f"\n{name}: {len(vals)} modifier(s)")
+    for v in vals[:8]:
+        cap = " (LINEAR)" if v == 0 else ""
+        print(f"  0x{v:016x}{cap}")
+    if len(vals) > 8:
+        print(f"  ... {len(vals)-8} more")
