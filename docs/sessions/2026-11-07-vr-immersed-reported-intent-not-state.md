@@ -59,3 +59,55 @@ step is a potential silent revert of a host fix, which makes the diff-before-ove
 bearing rather than polite. Two independent path sources (the script's search list and the documented
 install location) drifting apart is what made the bug survive this long: the same information existed
 twice and only one copy was edited.
+
+---
+
+# Follow-up: the inhibitor message was also lying
+
+**Version 0.5.8.** Two consecutive `vr-immersed` runs produced different output:
+
+```
+run 1: Screen lock and suspend held off while Immersed runs.
+run 2: (no such line)
+```
+
+Read at face value, run 2 says the protection had quietly stopped — and idle lock is a known
+zero-copy killer, so that reading is alarming.
+
+**It was the message, not the lock.** Verified directly:
+
+```
+gnome-session-inhibit ... --inhibit idle:suspend   <- process still alive (pid 1216956)
+org.gnome.SessionManager.IsInhibited    flag 4 (suspend) -> True
+org.gnome.SessionManager.IsInhibited    flag 8 (idle)    -> True
+```
+
+The script printed its confirmation inside the branch that *creates* the inhibitor, so on every
+subsequent run — where the inhibitor already exists — it printed nothing at all.
+
+## Getting the flag numbers right
+
+The first attempt at checking this used the wrong enum and reported "idle = False, suspend = True",
+which looks like a genuine half-broken inhibitor. The actual values are **logout=1, switch-user=2,
+suspend=4, idle=8**; the initial query passed `1` and `8` and mislabelled them. Worth pinning down
+before drawing a conclusion from a boolean whose meaning you guessed.
+
+`ListInhibitors` is not exposed on this gnome-session (`UnknownMethod`), so the state has to be read
+per-flag through `IsInhibited`. `gdbus` needs no Python:
+
+```bash
+gdbus call --session --dest org.gnome.SessionManager \
+  --object-path /org/gnome/SessionManager \
+  --method org.gnome.SessionManager.IsInhibited 8      # -> (true,)
+```
+
+`vr-immersed` now queries that and prints "held off" / "still held off", or a WARNING if idle is not
+inhibited.
+
+## Same failure mode as the AppImage bug
+
+Three bugs in two commits, and all three are the same mistake: **reporting an intention instead of a
+state.** "Started Immersed agent" without checking the process; "Screen lock held off" without
+checking the inhibitor; and a search list that assumed where the file was rather than looking. A
+helper script's output is read as fact, so every line that claims something happened should be backed
+by a check that it did.
