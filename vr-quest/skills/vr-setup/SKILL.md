@@ -194,7 +194,23 @@ saved brightness is never 0); `vr-immersed --stop` quits the agent and the heads
 the screen back on; `--keep-screen` skips the backlight. `vr-immersed --link home` ties the current Wi-Fi SSID to the profile
 (`~/.config/vr-layouts/immersed/places`, `SSID=profile` lines); plain `vr-immersed` then picks
 the linked profile automatically and leaves the setup alone on unlinked networks. `--list` shows
-profiles and links. VR screen
+profiles and links.
+
+**Known gap: auto-selection is Wi-Fi-only, so it silently does nothing off Wi-Fi.** Measured
+2026-11-07: `profile_for_ssid` returns empty for both an **Ethernet** connection (`current_ssid` is
+blank) and any **unlinked SSID**, so `vr-immersed` starts the agent with whatever `~/.ImmersedConf`
+happens to hold rather than applying a profile. That is safe-but-unpredictable, not broken — the
+conf is what the last `--save`/apply left behind. Worth knowing when VDData looks stale after
+switching networks.
+
+- **Layouts are already per machine** (`~/.config/vr-layouts/hosts/<hostname>/…`), because connector
+  names and panel sizes differ per PC. **Profiles are not** — they live in a single global
+  `~/.config/vr-layouts/immersed/profiles/`. That is fine on a one-`$HOME`-per-box setup, but it is
+  the inconsistent half: if `~/.local/share` is ever network-shared, or a `$HOME` is adopted from
+  another machine, the wrong VDData can be applied with no warning. A hostname fallback
+  (`hosts/<host>/places` → machine default profile) would close it without touching Wi-Fi links.
+
+VR screen
 positions live on the headset and window-to-monitor placement can't be scripted on GNOME Wayland,
 so neither is part of a profile. It finds the newest AppImage among the places it actually lands —
 `~/.local/opt/immersed/` (where §1 installs it), `~/Applications/` (AppImageLauncher may move/rename
