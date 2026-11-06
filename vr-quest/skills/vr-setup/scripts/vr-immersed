@@ -19,6 +19,11 @@
 # and a later reconnect can kill a stream. Keep Mutter's default packing and
 # arrange the screens in VR instead. So the layout watcher is opt-in (--watch).
 #
+# While the agent runs, GNOME's idle screen lock and auto-suspend are inhibited
+# (gnome-session-inhibit, released automatically when Immersed exits). A lock
+# removes the virtual monitors and costs zero-copy; reading in VR without
+# touching the keyboard for idle-delay (default 5 min) triggered it.
+#
 # Starting turns the laptop backlight off (the panel keeps running, so it still
 # shows in VR); the brightness key or `vr-immersed --stop` brings it back.
 #
@@ -209,6 +214,14 @@ if adb get-state >/dev/null 2>&1; then
 else
   echo "Headset not on USB/adb; open Immersed on the headset yourself and press Connect."
 fi
+# Keep GNOME from locking/suspending while Immersed runs (a lock tears down the
+# virtual monitors and kills zero-copy). One inhibitor per session; it exits with Immersed.
+if command -v gnome-session-inhibit >/dev/null && ! pgrep -f '[g]nome-session-inhibit .*Immersed VR' >/dev/null; then
+  setsid nohup gnome-session-inhibit --app-id immersed --reason "Immersed VR" --inhibit idle:suspend \
+    sh -c 'sleep 30; while pgrep -x Immersed >/dev/null; do sleep 10; done' >/dev/null 2>&1 < /dev/null &
+  echo "Screen lock and suspend held off while Immersed runs."
+fi
+
 # Opt-in only: re-applying a layout mid-session breaks zero-copy (see RULE above).
 prof=$(current_profile)
 layout_file="$HOME/.config/vr-layouts/hosts/$(uname -n)/${prof:-default}.json"

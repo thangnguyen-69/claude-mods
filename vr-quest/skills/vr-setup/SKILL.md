@@ -64,6 +64,12 @@ Confirmed 2026-11-06 (Fedora 42, GNOME 48, Intel UHD i5-1335U, Immersed Linux 11
   user. Immersed's own CPU did **not** change between modes (~2–3 cores; its encoder sends ~60 fps
   regardless of the FPS cap) — zero-copy is about memory, smoothness and stability, not Immersed CPU.
 
+**GNOME's idle screen lock does it too** (observed 2026-11-06 15:22): after 5 min without keyboard/mouse input
+(`idle-delay 300`, easy to hit while just reading in VR) the screen shield came up, gnome-shell logged
+`Removed virtual monitor Meta-0`, and both streams failed with `no more input formats` — zero-copy lost.
+`vr-immersed` now holds a `gnome-session-inhibit --inhibit idle:suspend` for as long as Immersed runs (no
+gsettings changed; released automatically). `vr-stats` flags a lock during the session.
+
 So: start with `vr-immersed`, keep Mutter's default packing, arrange screens **in VR** only, and never
 script layout changes during a session. Multiple screens are fine as long as zero-copy holds (watch GPU
 busy in `vr-stats`). The layout watcher (`vr-layout watch`) is opt-in (`vr-immersed --watch`) and not

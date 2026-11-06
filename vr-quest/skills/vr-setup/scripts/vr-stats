@@ -134,8 +134,10 @@ if pgrep -x Immersed >/dev/null; then
     else
       echo "  zero-copy: unknown (no DMA-BUF buffers seen yet)"
     fi
+    grep -q 'screenShield' <(journalctl --user --since "$(stat -c %y "/proc/$pid" | cut -d. -f1)" --no-pager -o cat 2>/dev/null) &&
+      echo "  note: GNOME's screen lock/shield ran during this session (a lock removes virtual monitors)."
     errs=$(grep -c -E 'PipeWire (stream state|remote) error' "$L")
-    [ "$errs" -gt 0 ] && echo "  WARNING: $errs PipeWire stream error(s) this session; last: $(grep -E 'PipeWire (stream state|remote) error' "$L" | tail -1 | cut -c12-19). A frozen screen = reconnect in the headset."
+    [ "$errs" -gt 0 ] && echo "  WARNING: $errs PipeWire stream error(s) this session; last: $(grep -E 'PipeWire (stream state|remote) error' "$L" | tail -1 | cut -c12-19). A frozen screen = vr-immersed --restart (reconnect does not heal it)."
   fi
 else
   echo "  Immersed agent not running"
