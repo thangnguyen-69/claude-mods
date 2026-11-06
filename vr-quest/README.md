@@ -30,7 +30,7 @@ vr-quest/
     wivrn-wayvr.md      # the WiVRn + WayVR procedure and traps
     scripts/
       vr-immersed       # Immersed: start + open on the Quest; per-place profiles (auto by Wi-Fi)
-      vr-layout         # Immersed: save / apply / restore the Mutter monitor layout
+      vr-layout         # Immersed: per-machine/per-profile Mutter layout; save / apply / watch (re-apply on Connect)
       vr-diag           # Immersed: one-shot diagnostic snapshot (+ --compare)
       vr-diag-watch     # Immersed: background sampler; `hang` = immediate capture
       wayvr             # WayVR wrapper: libopenvr path + newest standalone binary

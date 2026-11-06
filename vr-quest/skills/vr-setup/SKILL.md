@@ -295,6 +295,31 @@ re-apply the layout you are escaping. Keep that restriction if you edit the scri
 Layout is **not durable**: Immersed re-applies its own config on every session change, so a
 headset reconnect reverts it. Re-run `vr-layout apply` after each connect.
 
+### Layouts are per machine and per profile, and re-applied on every Connect
+
+`vr-layout` stores desired layouts in `~/.config/vr-layouts/hosts/<hostname>/<NAME>.json`, where NAME is
+normally the `vr-immersed` profile. Two PCs never share a layout: connector names (`eDP-1` vs `DP-1`) and
+panel sizes differ. Lookup order: `hosts/<host>/<NAME>.json`, `hosts/<host>/default.json`, the legacy
+`~/.config/vr-layouts/desired.json`, then the built-in example.
+
+```bash
+# arrange the screens (GNOME Settings, or a hand-written spec + apply), then:
+vr-layout save-desired home-wide      # -> hosts/$(uname -n)/home-wide.json
+vr-layout show home-wide              # prints which file it will use
+```
+
+`vr-immersed` detects the active profile (the one whose `VDData` matches `~/.ImmersedConf`) and, if this
+host has a layout for it, starts `vr-layout watch <profile>` in the background (log:
+`~/.local/state/vr-layout-watch.log`). The watcher re-applies the layout ~3 s after the monitor **set**
+changes to the one the layout describes (= a headset Connect), re-checks once within 15 s in case Immersed
+repacks again, never more than twice per Connect, and ignores plain moves so a manual rearrangement in GNOME
+Settings is not fought. It only sends positions (no monitor on/off), holds a per-host lock (one instance),
+and exits when Immersed stops.
+
+`apply` now **refuses a layout that does not cover every active monitor** — Mutter switches off any monitor
+left out of `ApplyMonitorsConfig`, so a two-screen layout applied to a three-screen profile would have
+blanked one.
+
 ## 6. Diagnosing a frozen or stuck stream
 
 **The `==== Screen Info ====` log block is ground truth**, emitted every 1–3 min. Read it before
@@ -1129,6 +1154,14 @@ framebuffer / first stream) while other streams do offset reads and per-row real
 stream gets a decoder/pipeline resource the others do not. Do not state a mechanism — state the observation.
 
 **What works today:** only one screen can be smooth, so **put the screen you actually read on at `(0,0)`**.
+
+**Moving the physical panel off the origin can work — confirmed 2026-11-06** (Fedora 42, GNOME 48, Intel
+UHD, laptop `eDP-1` + one 2560x1080 virtual). Applied mid-session: `Meta-0` ultrawide at `(0,0)`, `eDP-1` at
+`(320,1080)`. Immersed's `Screen Info` then reported **both** streams at `Capture (0, 0)` — the laptop's `y`
+"should" have been 1080 — yet the user confirmed the laptop panel in VR **kept updating normally**, and the
+ultrawide became the smooth stream. So the physical stream's `Capture -` offset is **not** a reliable
+frozen/stale signal on its own: ask the user what the panel shows before calling it broken. The 2026-10-31
+freeze also involved monitor off/on toggles, which this test did not; treat that as the likelier trigger.
 For a layout with a tall portrait plus a wide screen, that means the portrait goes in slot 0.
 
 **`x=0` alone is NOT enough** — tested 2026-11-03: a 720p stream at `(0, 1080)` (left edge, not the origin)

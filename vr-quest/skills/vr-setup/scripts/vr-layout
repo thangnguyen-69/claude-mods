@@ -15,11 +15,21 @@ SAFETY
     - Never invents a mode: every mode string is read back from Mutter, so a
       monitor that is unplugged or has no current mode is skipped with a message
       instead of being sent a bogus value.
-    - Refuses to run if the monitor set differs from the saved layout.
+    - Refuses to apply a layout that does not cover every current monitor
+      (a missing entry would make Mutter switch that monitor off).
+
+PER MACHINE, PER PROFILE
+    Desired layouts live in ~/.config/vr-layouts/hosts/<hostname>/<NAME>.json,
+    so two PCs never share one (connector names and panel sizes differ). NAME is
+    normally the vr-immersed profile (home, home-wide, ...); default "default".
+    Lookup: hosts/<host>/<NAME>.json, then hosts/<host>/default.json, then the
+    legacy ~/.config/vr-layouts/desired.json, then the built-in example.
 
 USAGE
     vr-layout save            # snapshot current layout -> ~/.config/vr-layouts/
-    vr-layout apply           # apply the desired layout (desired.json, else built-in)
+    vr-layout apply [NAME]    # apply the desired layout NAME for THIS machine
+    vr-layout save-desired [NAME]   # store the current layout as desired NAME
+    vr-layout watch [NAME]    # stay running; re-apply NAME after each headset connect
     vr-layout restore [name]  # restore a snapshot (default: most recent)
     vr-layout show            # print current + saved layouts, change nothing
     vr-layout list            # list snapshots
@@ -59,10 +69,33 @@ DESIRED = [
     {"connector": "DP-1",   "x": 1440, "y": 0, "primary": True},
     {"connector": "Meta-1", "x": 3360, "y": 0, "primary": False},
 ]
-_desired_file = os.path.join(STORE, "desired.json")
-if os.path.exists(_desired_file):
-    with open(_desired_file) as _f:
-        DESIRED = json.load(_f)
+HOST_DIR = os.path.join(STORE, "hosts", os.uname().nodename)
+
+
+def desired_path(name=None):
+    """Return (path, spec) for the desired layout; path None = built-in."""
+    candidates = []
+    if name:
+        candidates.append(os.path.join(HOST_DIR, f"{name}.json"))
+    candidates += [os.path.join(HOST_DIR, "default.json"),
+                   os.path.join(STORE, "desired.json")]
+    for c in candidates:
+        if os.path.exists(c):
+            with open(c) as f:
+                return c, json.load(f)
+    return None, DESIRED
+
+
+def save_desired(name):
+    state = read_state()
+    spec = [{"connector": l["connector"], "x": l["x"], "y": l["y"],
+             "primary": l["primary"]} for l in state["layout"]]
+    os.makedirs(HOST_DIR, exist_ok=True)
+    path = os.path.join(HOST_DIR, f"{name or 'default'}.json")
+    with open(path, "w") as f:
+        json.dump(spec, f, indent=2)
+    show(state, "SAVED AS DESIRED")
+    print(f"wrote {path}")
 
 
 def bus():
@@ -145,6 +178,12 @@ def apply_layout(spec, persist):
         print(f"ABORT: connector(s) not present: {', '.join(missing)}")
         print("       (headset disconnected, or Immersed not running)")
         return False
+    active = {l["connector"] for l in state["layout"]}
+    uncovered = sorted(active - set(required))
+    if uncovered:
+        print(f"ABORT: layout does not cover active monitor(s): {', '.join(uncovered)}")
+        print("       (applying it would switch them off; save a layout for this profile)")
+        return False
 
     logical = []
     for s in spec:
@@ -202,6 +241,68 @@ def restore(name, persist):
     return apply_layout(spec, persist)
 
 
+def layout_matches(state, spec):
+    cur = {l["connector"]: (l["x"], l["y"], l["primary"]) for l in state["layout"]}
+    want = {s["connector"]: (s["x"], s["y"], s["primary"]) for s in spec}
+    return cur == want
+
+
+def watch(name, persist):
+    """Re-apply the desired layout whenever the monitor SET changes to the one
+    the layout describes (i.e. a headset connect), never on a mere move, so a
+    manual rearrangement in GNOME Settings is left alone. Exits when Immersed
+    stops. Only layout positions are sent: no monitor on/off toggles."""
+    import fcntl
+    import subprocess
+    import time
+    lock = open(os.path.join(STORE, f".watch-{os.uname().nodename}.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("vr-layout watch: already running")
+        return
+    path, spec = desired_path(name)
+    want_set = {s["connector"] for s in spec}
+    print(f"{time.strftime('%T')} watching; layout {path or 'built-in'}", flush=True)
+    last_set = None
+    pending = None          # time at which to apply (settle delay)
+    applied_at = 0.0
+    tries = 0               # applies since the last connect (capped at 2)
+    started = time.time()
+    while True:
+        # Grace period: vr-immersed starts us right after launching the agent.
+        if time.time() - started > 30 and \
+                subprocess.run(["pgrep", "-x", "Immersed"], capture_output=True).returncode:
+            print(f"{time.strftime('%T')} Immersed stopped; exiting", flush=True)
+            return
+        try:
+            state = read_state()
+        except Exception as e:  # noqa: BLE001
+            print(f"{time.strftime('%T')} read failed: {e}", flush=True)
+            time.sleep(5)
+            continue
+        cur_set = {l["connector"] for l in state["layout"]}
+        now = time.time()
+        if cur_set != last_set:
+            last_set = cur_set
+            pending = now + 3 if cur_set == want_set else None
+            tries = 0
+        # Immersed may repack once more right after connecting: one re-check.
+        if pending is None and cur_set == want_set and tries < 2 \
+                and 0 < now - applied_at < 15 and not layout_matches(state, spec):
+            pending = now
+        if pending and now >= pending:
+            pending = None
+            if layout_matches(state, spec):
+                print(f"{time.strftime('%T')} connect: layout already correct", flush=True)
+            else:
+                print(f"{time.strftime('%T')} connect: applying", flush=True)
+                apply_layout(spec, persist)
+                tries += 1
+            applied_at = time.time()
+        time.sleep(2)
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "show"
     persist = "--persist" in argv
@@ -209,16 +310,24 @@ def main(argv):
 
     if cmd == "save":
         save()
+    elif cmd == "save-desired":
+        save_desired(argv[2] if len(argv) > 2 else None)
+    elif cmd == "watch":
+        watch(argv[2] if len(argv) > 2 else None, persist)
     elif cmd == "show":
         show(read_state(), "CURRENT")
-        print("desired:")
-        for d in DESIRED:
+        name = argv[2] if len(argv) > 2 else None
+        path, spec = desired_path(name)
+        print(f"desired ({path or 'built-in'}):")
+        for d in spec:
             print(f"  {d['connector']:9} x={d['x']:>5} y={d['y']:>4} "
                   f"{'PRIMARY' if d['primary'] else ''}")
     elif cmd == "list":
         list_snapshots()
     elif cmd == "apply":
-        ok = apply_layout(DESIRED, persist)
+        path, spec = desired_path(argv[2] if len(argv) > 2 else None)
+        print(f"layout: {path or 'built-in'}")
+        ok = apply_layout(spec, persist)
         sys.exit(0 if ok else 1)
     elif cmd == "restore":
         name = argv[2] if len(argv) > 2 else None
