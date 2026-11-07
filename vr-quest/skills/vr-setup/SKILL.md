@@ -213,6 +213,15 @@ because there is no error — just an empty extension list.
   witnessed.
 - **Why it works on other hosts is still not explained.** Do not claim the fix is "upgrade" or "patch
   Mutter" — nothing here is host-specific except this timing.
+- **An `LD_PRELOAD` shim that pre-initialises EGL CANNOT fix it — tested and ruled out (2026-11-07).**
+  The tempting idea is to call `eglInitialize()` in a library constructor so the extension string is
+  populated before Immersed asks. It fails because **the extension string is per-display, not
+  process-wide**: initialising `EGL_DEFAULT_DISPLAY` leaves a GBM *platform* display (which is what
+  Immersed uses, via `eglGetPlatformDisplayEXT(EGL_PLATFORM_GBM_KHR, gbm_dev)`) reporting **0**
+  extensions — measured, control run also 0. Since Immersed queries its own platform display, a ctor
+  on any other display is irrelevant. Do not re-attempt this. (A `GetModules`-style hook that
+  initialises *that* display before Immersed queries it would work in principle, but it needs the
+  `EglDmaBuf` object's private state, which is not reachable from a preload shim.)
 - **`XDG_SESSION_TYPE`/auth matter for reproducing this by hand**: driving EGL from a shell with a
   stale `XAUTHORITY` makes `eglInitialize` fail outright, which reproduces the "0 extensions" state for
   the wrong reason (and will fake a confirmation). Use the live `-auth` path from `pgrep -af Xwayland`.
