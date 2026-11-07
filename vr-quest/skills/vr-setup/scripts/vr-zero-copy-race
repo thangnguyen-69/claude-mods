@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Race test: does a fresh Immersed process ever win the EGL-init race and
+# negotiate DMA-BUF zero-copy?
+#
+#   vr-zero-copy-race restart [round]   # restart the agent (guarded)
+#   vr-zero-copy-race report            # verdict: fds, dataType both sides, ordering
+#
+# Hypothesis (2026-11-07): StartScreenCastStream probes DMA-BUF ~16 ms BEFORE
+# eglInitialize() completes, so eglQueryString(EGL_EXTENSIONS) returns empty,
+# BuildFormat emits a format pod with no `modifier`, and Mutter's rule picks
+# MemFd. If the two are unsequenced this is a race, so some launches should win.
+#
+# IMPORTANT: the probe only runs when a stream starts, i.e. on Connect — not on
+# process start. `restart` alone measures nothing; each real sample needs a
+# headset Connect followed by `report`. Do not read a single pre-connect run as
+# evidence either way.
+#
+# Safety: `restart` refuses while virtual monitors (Meta-*) are live, because
+# killing Immersed then is the documented session-crash path (see SKILL.md §11).
+# Override with FORCE=1 only if the user accepts that risk (closing apps first
+# was measured to prevent the abort).
+set -u
+out=${VR_RACE_OUT:-/tmp/race-results.txt}
+[ "${1:-}" = restart ] && : > "$out"
+
+restart_round() {
+  local n=$1
+  echo "--- round $n: $(date '+%T') ---" | tee -a "$out"
+
+  # Guard: never kill while Meta-* are live unless FORCE=1 (documented crash path).
+  local meta
+  meta=$(vr-layout show 2>/dev/null | sed -n '1,/^desired:/p' | grep -c 'Meta-')
+  if [ "$meta" -ne 0 ] && [ "${FORCE:-0}" != 1 ]; then
+    echo "SKIP: $meta virtual monitor(s) live; rerun with FORCE=1 to override" | tee -a "$out"
+    return 1
+  fi
+
+  vr-immersed --restart 2>&1 | sed 's/^/    /' | tee -a "$out"
+
+  # Wait for a process, then report state. The stream (and therefore the probe)
+  # only happens after Connect, so this records pre-connect state; re-run
+  # `vr-race-report` after connecting to capture the verdict.
+  for _ in $(seq 1 30); do pgrep -x Immersed >/dev/null && break; sleep 1; done
+  local pid
+  pid=$(pgrep -x Immersed | head -1)
+  if [ -z "$pid" ]; then
+    echo "    FAILED to start" | tee -a "$out"
+    return 1
+  fi
+  echo "    pid=$pid  dmabuf=$(ls -l /proc/$pid/fd 2>/dev/null | grep -c dmabuf)" | tee -a "$out"
+}
+
+report() {
+  echo "=== post-connect report $(date '+%T') ===" | tee -a "$out"
+  local pid; pid=$(pgrep -x Immersed | head -1)
+  echo "pid=${pid:-none} dmabuf=$(ls -l /proc/${pid:-0}/fd 2>/dev/null | grep -c dmabuf) memfd=$(ls -l /proc/${pid:-0}/fd 2>/dev/null | grep -c mutter-screen-cast-memfd)" | tee -a "$out"
+  vr-stats 2>/dev/null | sed -n '/zero-copy/,+3p' | tee -a "$out"
+  local L; L=$(ls -t "$HOME"/.Immersed/Logs/*.txt 2>/dev/null | head -1)
+  echo "log: $(basename "$L")" | tee -a "$out"
+  echo "--- ordering in this launch (probe vs EGL init) ---" | tee -a "$out"
+  grep -nE "Started screen cast session|Egl initialization succeeded|PipeWire stream format changed" "$L" 2>/dev/null \
+    | head -6 | sed 's/ D \[.*\]/ /' | tee -a "$out"
+  echo "--- producer/consumer dataType ---" | tee -a "$out"
+  timeout 15 pw-dump 2>/dev/null > /tmp/pw-race.json
+  /usr/bin/python3 -I - /tmp/pw-race.json 2>/dev/null <<'PY' | tee -a "$out"
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+for o in d:
+    if o.get('type')!='PipeWire:Interface:Port': continue
+    p=(o.get('info') or {}).get('props',{}) or {}
+    b=((o.get('info') or {}).get('params',{}).get('Buffers') or [{}])[0]
+    dt=(b.get('dataType') or {}).get('default')
+    if dt is not None and p.get('port.name') in ('output_1','input_1'):
+        who='Mutter' if p.get('port.direction')=='out' else 'Immersed'
+        print(f"    {who:9} dataType={dt}" + ("  <- DMA-BUF!" if dt and dt & 8 else ""))
+PY
+}
+
+case "${1:-}" in
+  restart) restart_round "${2:-1}" ;;
+  report)  report ;;
+  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

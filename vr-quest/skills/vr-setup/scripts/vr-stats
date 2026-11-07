@@ -133,11 +133,13 @@ if pgrep -x Immersed >/dev/null; then
     elif [ "$nd" -gt 0 ]; then
       echo "  zero-copy: OK ($nd DMA-BUF buffers)"
     elif [ "$nmem" -gt 0 ]; then
-      echo "  zero-copy: NOT IN USE -- $nmem Mutter memfd (RAM copy) buffers on a fresh-looking process."
-      echo "             Check the negotiation both ways before blaming the layout; on some hosts"
-      echo "             (Ubuntu 24.04 / Mutter 46.2 / AMD) DMA-BUF is never offered at all."
-      echo "             Compare producer vs consumer dataType (4=MemFd only, 8=DmaBuf) with the"
-      echo "             pw-dump snippet in SKILL.md, section 9, \"When DO frames travel zero-copy\"."
+      echo "  zero-copy: NOT IN USE -- $nmem Mutter memfd (RAM copy) buffers."
+      echo "             Known cause (2026-11-07): Immersed probes DMA-BUF ~16 ms BEFORE"
+      echo "             eglInitialize() completes, so it sees 0 EGL extensions and asks for"
+      echo "             MemFd. Likely a race -- a fresh start may occasionally win it:"
+      echo "               vr-immersed --restart, then Connect, then: vr-zero-copy-race report"
+      echo "             Compare both sides yourself with the pw-dump snippet in SKILL.md s9"
+      echo "             (4=MemFd only, 6=MemPtr|MemFd, 8=DmaBuf bit present)."
     else
       echo "  zero-copy: unknown (no DMA-BUF buffers seen yet)"
     fi

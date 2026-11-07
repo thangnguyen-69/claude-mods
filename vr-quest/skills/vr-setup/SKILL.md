@@ -45,12 +45,12 @@ edit, fold it into the script here rather than re-patching the installed copy.
 
 ```bash
 SKILL_DIR="<this skill's base directory>"     # the folder containing this SKILL.md
-for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch; do
+for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch vr-dmabuf vr-zero-copy-race; do
   [ -f ~/.local/bin/$f ] && ! cmp -s "$SKILL_DIR/scripts/$f" ~/.local/bin/$f && \
     { echo "== $f differs — review before overwriting =="; diff -u ~/.local/bin/$f "$SKILL_DIR/scripts/$f" | head -40; }
 done
 # then install
-for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
+for f in vr-stats vr-immersed vr-layout vr-diag vr-diag-watch vr-dmabuf vr-zero-copy-race; do install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f; done
 # WiVRn + WayVR
 for f in wayvr vr-start vr-reconnect vr-ready vr-workspace vr-term alacritty-vr spotify-vr chrome-vr vr-fix vr-hand-bindings; do
   install -Dm755 "$SKILL_DIR/scripts/$f" ~/.local/bin/$f
