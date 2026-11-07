@@ -195,15 +195,27 @@ This explains every prior observation coherently: the code path is linked and wo
 right order*, the GPU/driver advertise the exact modifier Mutter offers, and the app logs nothing
 because there is no error — just an empty extension list.
 
-- **Why it works on other hosts is not explained by this alone** — it may be a race: if `eglInitialize`
-  happens to complete first on a faster/luckier start, the probe succeeds. Do not claim the fix is
-  "upgrade" or "patch Mutter"; nothing here is host-specific except timing.
-- **It also explains intermittency.** Ordering between `StartScreenCastStream` and EGL init is not
-  sequenced, so a host could get DMA-BUF on one launch and not another. If `vr-stats` shows zero-copy
-  absent, a restart is a lottery ticket rather than a fix, and worth trying before concluding anything.
+- **It is NOT a race — measured 2026-11-07 over two launches.** My first reading predicted that a
+  lucky start might get `eglInitialize` in first. It does not:
+
+  | launch | probe | `Egl initialization succeeded` | Δ | `dataType` |
+  |---|---|---|---|---|
+  | 01:06 | `.473` / `.474` | `.490` | ~16 ms | 4 / 6 |
+  | 08:31 | `.201` / `.202` | `.218` | ~16 ms | 4 / 6 |
+
+  The gap is stable to the millisecond, so the probe is **structurally ordered before** EGL init, not
+  racing it. **A restart is therefore not a lottery ticket and will never recover zero-copy here** —
+  do not suggest `vr-immersed --restart` as a way to regain it on this host (the shipped
+  `vr-zero-copy-race` exists to test exactly this, and has now answered it).
+- **Caveat on that sample:** the 08:31 restart did not carry the debug env, so
+  `QueryDmaBufModifiers`' return value was not observed. Ordering-before-init is consistent with
+  everything and is the best explanation, but the failure at the `EglDmaBuf` call site is not directly
+  witnessed.
+- **Why it works on other hosts is still not explained.** Do not claim the fix is "upgrade" or "patch
+  Mutter" — nothing here is host-specific except this timing.
 - **`XDG_SESSION_TYPE`/auth matter for reproducing this by hand**: driving EGL from a shell with a
   stale `XAUTHORITY` makes `eglInitialize` fail outright, which reproduces the "0 extensions" state for
-  the wrong reason. Use the live `-auth` path from `pgrep -af Xwayland`.
+  the wrong reason (and will fake a confirmation). Use the live `-auth` path from `pgrep -af Xwayland`.
 
 **Next step is disassembly, not logging:** find where `StartScreenCastStream` builds the `Buffers`
   pod's `dataType` and what makes it emit `6` (`MemPtr|MemFd`) instead of `14`
