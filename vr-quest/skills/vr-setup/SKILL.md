@@ -166,7 +166,7 @@ excluded: compositor (Mutter 48 logic identical), PipeWire version gates (all cl
   EGL_LOG_LEVEL=debug` actually reaching the process, Immersed still logs **nothing** about declining
   — and at `Screen count is 0` EGL is not even initialised, so an unconnected probe yields no data.
   Both were tried; do not repeat them.
-- **ROOT CAUSE FOUND (2026-11-07) — Immersed probes DMA-BUF before EGL is initialised.**
+**ROOT CAUSE (2026-11-07) — Immersed probes DMA-BUF before EGL is initialised.**
 
 The app builds its `Format`/`Buffers` pods, then initialsises EGL, 17 ms too late:
 
@@ -211,7 +211,33 @@ because there is no error — just an empty extension list.
   `QueryDmaBufModifiers`' return value was not observed. Ordering-before-init is consistent with
   everything and is the best explanation, but the failure at the `EglDmaBuf` call site is not directly
   witnessed.
-- **Why it works on other hosts is still not explained.** Do not claim the fix is "upgrade" or "patch
+### How to tell whether zero-copy is actually in use
+
+Four independent lines. Do not rely on one — and note that only the last two can falsify a *claim
+about the cause*; the first two only measure the current state.
+
+1. **The negotiation bitmask** — the contract. See §9: `dataType & 8` on the producer, or `14` on the
+ consumer, is the only thing that means a dmabuf will be handed over. Today both say no
+ (Mutter `4`, Immersed `6`).
+2. **The fd census** — the consequence. A dmabuf import requires an fd per buffer held for the
+ buffer's lifetime:
+
+ ```bash
+ ls -l /proc/$(pgrep -x Immersed)/fd | grep -c dmabuf          # 0 = none
+ ls -l /proc/$(pgrep -x Immersed)/fd | grep -c mutter-screen-cast-memfd   # frames in RAM
+ ```
+
+ Seeing any `dmabuf` fd would **falsify** the whole finding on the spot.
+3. **CPU collapse test** — a prediction, not evidence. RAM-copy converts ~24 MP/s of BGRA to NV12; if
+ zero-copy ever engaged, Immersed's CPU should drop sharply. Measure before/after a change to catch
+ a wrong mechanism.
+4. **At the call site** — the only thing that promotes the root cause from inference to fact: run
+   Immersed **under gdb as parent** (`ptrace_scope=1` here blocks attaching to an existing process)
+   and break `EglDmaBuf::QueryDmaBufModifiers` (0x5ae310 in the 11.0 build) and `eglInitialize`, to
+   witness the order and the empty return. `perf`/`bpftrace` are unavailable
+   (`perf_event_paranoid=4`).
+
+**Why it works on other hosts is still not explained.** Do not claim the fix is "upgrade" or "patch
   Mutter" — nothing here is host-specific except this timing.
 - **An `LD_PRELOAD` shim that pre-initialises EGL CANNOT fix it — tested and ruled out (2026-11-07).**
   The tempting idea is to call `eglInitialize()` in a library constructor so the extension string is
@@ -979,8 +1005,20 @@ screens at 60 fps is ~180 frame handlings/sec. Cost scales roughly linearly with
 4.61 MP → 0.85 cores; 8.32 MP → 1.79 cores).
 
 **When DO frames travel zero-copy? Read the negotiation, don't guess.** Two `dataType` fields decide
-it, and they are a *bitmask* over `spa_data_type` (`MemPtr`=1, `MemFd`=2, `DmaBuf`=3, so
-`1<<MemFd` = **4**, `1<<DmaBuf` = **8**). `pw-dump` is JSON, so extract with python rather than grep:
+it. `dataType` is a **bitmask** whose bits are `1 << enum_value` of `spa_data_type`, so the values on
+the wire are:
+
+| `dataType` | means |
+|---|---|
+| `2` | MemPtr |
+| `4` | MemFd (frame in RAM) |
+| `6` | MemPtr\|MemFd — what Immersed sends here |
+| `8` | **DmaBuf** — zero-copy |
+| `14` | MemPtr\|MemFd\|DmaBuf — what Immersed *should* send |
+
+**`dataType & 8` is the only thing that means a dmabuf.** Do not confuse the enum ordinal (`MemFd`=2)
+with its bit (`1<<2`=4); writing "MemFd=2" has already caused one misread in this very investigation.
+`pw-dump` is JSON, so extract with python rather than grep:
 
 ```bash
 pw-dump > /tmp/pw.json
