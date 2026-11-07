@@ -1163,13 +1163,16 @@ has no logical monitor to return *because* the monitors are already gone.
 - **Practical consequence:** any Immersed death while streaming — crash, `pkill`, a config rewrite
   that restarts it — can take the session wholesale. That is the existing warning below, now with a
   concrete mechanism and a repeat rate.
-- **Closing applications first is a real mitigation — measured 2026-11-07 01:01.** With the desktop
-  emptied and both `Meta-*` monitors live, a forced `vr-immersed --restart` removed them
+- **Closing applications first is a real mitigation — measured twice.** With the desktop emptied and
+  both `Meta-*` monitors live, a forced `vr-immersed --restart` removed them
   (`Removed virtual monitor Meta-0` / `Meta-1`) with **no crash**: no segfault, no `GNOME Shell
-  crashed`, same gnome-shell pid. Compare the two earlier occurrences, which aborted on a busy
-  desktop. So teardown alone is not sufficient — **open windows are what trip the assertion**, very
-  likely via Tiling Assistant's window→work-area lookups. Recommend closing apps before any restart
-  with virtual monitors live; that is more than data-loss hygiene.
+  crashed`, same gnome-shell pid. Reproduced 2026-11-07 08:31 (pid unchanged, `GNOME Shell crashed`
+  count 0), after the first observation at 01:01. Compare the two earlier occurrences, which aborted
+  on a busy desktop. So teardown alone is not sufficient — **open windows are what trip the
+  assertion**, very likely via Tiling Assistant's window→work-area lookups. Recommend closing apps
+  before any restart with virtual monitors live; that is more than data-loss hygiene.
+  Two clean reproductions of the *surviving* path against two aborts is still not a mechanism —
+  the window→work-area theory remains unproven.
 - **Disabling Tiling Assistant remains untested.** It is the frame calling into the failing assertion,
   but do not present removal as a fix. Note it is stock Ubuntu
   (`gnome-shell-extension-ubuntu-tiling-assistant`), not something added here, and that this skill
